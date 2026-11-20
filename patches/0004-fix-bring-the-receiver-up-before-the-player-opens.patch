@@ -1,0 +1,103 @@
+From 82bd0638dfb184d58607cab82b73dfa21192bea0 Mon Sep 17 00:00:00 2001
+From: Selman Trabzon <selman.trbzon@gmail.com>
+Date: Fri, 20 Nov 2026 23:25:24 +0300
+Subject: [PATCH 4/4] fix: bring the receiver up before the player opens
+
+A hidden window draws no frames, so the player route, and with it the
+show that hung off it, never landed: a second remote play played with no
+window. Show it as soon as a play command arrives, fall back to
+gtk_window_present when a plain show doesn't map it, and keep fullscreen
+across hide so the next play comes back fullscreen.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ lib/auth/repositories/session_repository.dart |  4 ++
+ lib/receiver/receiver_mode.dart               | 40 +++++++++++++++++--
+ 2 files changed, 40 insertions(+), 4 deletions(-)
+
+diff --git a/lib/auth/repositories/session_repository.dart b/lib/auth/repositories/session_repository.dart
+index 9019397b3..735a2d8ac 100644
+--- a/lib/auth/repositories/session_repository.dart
++++ b/lib/auth/repositories/session_repository.dart
+@@ -73,6 +73,7 @@ import '../models/user.dart';
+ import 'server_repository.dart';
+ import 'user_repository.dart';
+ import '../../watch_party/silo_watch_party_manager.dart';
++import '../../receiver/receiver_mode.dart';
+ 
+ enum SessionState { ready, restoring, switching }
+ 
+@@ -1245,6 +1246,9 @@ class SessionRepository {
+   ) async {
+     if (generation != _remoteNavigationGeneration) return;
+     _remoteSearch?.close();
++    // A hidden receiver draws no frames, so it has to be up before the player
++    // route can open.
++    if (receiverModeEnabled) await ReceiverWindowController.instance.present();
+     final item = items[startIndex];
+     final isLiveTv = _isLiveTvItem(item);
+     final allowDirect = isLiveTv
+diff --git a/lib/receiver/receiver_mode.dart b/lib/receiver/receiver_mode.dart
+index d367d2e78..a76412b40 100644
+--- a/lib/receiver/receiver_mode.dart
++++ b/lib/receiver/receiver_mode.dart
+@@ -84,20 +84,52 @@ class ReceiverWindowController {
+     });
+   }
+ 
+-  Future<void> _present() async {
++  Future<void> _present() => present();
++
++  /// Brings the window up fullscreen for playback. Called as soon as a play
++  /// command arrives: a hidden window draws no frames, so waiting for the
++  /// player route to open would wait forever.
++  Future<void> present() async {
++    if (!receiverModeEnabled || !PlatformDetection.isDesktop) return;
++    _hideTimer?.cancel();
+     try {
+-      await windowManager.show();
++      if (!await windowManager.isVisible()) {
++        await windowManager.show();
++        if (!await _becomesVisible()) {
++          // gtk_window_present maps a hidden toplevel where a plain show
++          // did not.
++          await windowManager.focus();
++          await _becomesVisible();
++        }
++      }
+       await windowManager.focus();
+-      await FullscreenHelper.setFullscreen(true);
++      final visible = await windowManager.isVisible();
++      if (!await FullscreenHelper.isFullscreen()) {
++        await FullscreenHelper.setFullscreen(true);
++      }
++      debugPrint(
++        '[Receiver] present: visible=$visible '
++        'fullscreen=${await FullscreenHelper.isFullscreen()}',
++      );
+     } catch (e) {
+       debugPrint('[Receiver] present failed: $e');
+     }
+   }
+ 
++  Future<bool> _becomesVisible() async {
++    for (var i = 0; i < 20; i++) {
++      if (await windowManager.isVisible()) return true;
++      await Future<void>.delayed(const Duration(milliseconds: 50));
++    }
++    return false;
++  }
++
++  /// Hides the window and leaves fullscreen as it is, so the next play
++  /// comes back fullscreen without a second request.
+   Future<void> hide() async {
+     try {
+-      await FullscreenHelper.setFullscreen(false);
+       await windowManager.hide();
++      debugPrint('[Receiver] hidden');
+     } catch (e) {
+       debugPrint('[Receiver] hide failed: $e');
+     }
+-- 
+2.56.0
+

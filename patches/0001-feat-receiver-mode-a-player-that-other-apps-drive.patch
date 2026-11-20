@@ -1,7 +1,7 @@
 From bde3cc8642f42b231bdb69f0f6c57686a1aed031 Mon Sep 17 00:00:00 2001
 From: Selman Trabzon <selman.trbzon@gmail.com>
 Date: Fri, 20 Nov 2026 22:52:28 +0300
-Subject: [PATCH] feat: receiver mode, a player that other apps drive
+Subject: [PATCH 1/4] feat: receiver mode, a player that other apps drive
 
 Built with --dart-define=RECEIVER_MODE=true. Jellyfin remote PlayNow or a
 play link opens the player; every other route lands on a small idle page,
