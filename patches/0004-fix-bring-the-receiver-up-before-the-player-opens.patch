@@ -1,4 +1,4 @@
-From 82bd0638dfb184d58607cab82b73dfa21192bea0 Mon Sep 17 00:00:00 2001
+From cdbc81905ed25d2b2909cdf26a0299a89a3dbf3a Mon Sep 17 00:00:00 2001
 From: Selman Trabzon <selman.trbzon@gmail.com>
 Date: Fri, 20 Nov 2026 23:25:24 +0300
 Subject: [PATCH 4/4] fix: bring the receiver up before the player opens

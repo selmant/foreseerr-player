@@ -1,64 +1,25 @@
-From 9208971976fd0c7a073f173f9d6c508bc62a64f2 Mon Sep 17 00:00:00 2001
+From 3ab72f77bfea110e0a90465528954fe331361e52 Mon Sep 17 00:00:00 2001
 From: Selman Trabzon <selman.trbzon@gmail.com>
 Date: Fri, 20 Nov 2026 23:05:35 +0300
 Subject: [PATCH 2/4] feat: pair receiver mode through foreseerr
 
-A pair link (<scheme>://pair?foreseerr=<url>&ticket=<ticket>[&mode=token])
-signs the player in without any sign-in screen. Quick Connect mode starts
-Quick Connect and has Foreseerr approve the code; token mode takes the
-user's linked Jellyfin token from Foreseerr. Sign-in screens give way to
-the idle page, which shows how pairing went.
+A pair link (<scheme>://pair?foreseerr=<url>&ticket=<ticket>) signs the
+player in without any sign-in screen: the player starts Jellyfin Quick
+Connect and Foreseerr approves the code as the ticket's user, so the
+player gets a Jellyfin device and session of its own. Sign-in screens
+give way to the idle page, which shows how pairing went.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- lib/auth/repositories/auth_repository.dart   |  27 +++
  lib/data/services/deep_link_service.dart     |  10 +-
  lib/main.dart                                |   2 +-
  lib/receiver/receiver_mode.dart              |   3 +
- lib/receiver/receiver_pairing.dart           | 176 +++++++++++++++++++
+ lib/receiver/receiver_pairing.dart           | 150 +++++++++++++++++++
  lib/ui/navigation/app_router.dart            |   7 +
  lib/ui/screens/receiver/receiver_screen.dart |  16 ++
- 7 files changed, 239 insertions(+), 2 deletions(-)
+ 6 files changed, 186 insertions(+), 2 deletions(-)
  create mode 100644 lib/receiver/receiver_pairing.dart
 
-diff --git a/lib/auth/repositories/auth_repository.dart b/lib/auth/repositories/auth_repository.dart
-index 092305a32..efab1d257 100644
---- a/lib/auth/repositories/auth_repository.dart
-+++ b/lib/auth/repositories/auth_repository.dart
-@@ -79,6 +79,33 @@ class AuthRepository {
-     }
-   }
- 
-+  /// Signs in with an access token issued elsewhere, such as one a pairing
-+  /// app hands over. The token is checked against `/Users/Me`.
-+  Future<LoginState> authenticateWithToken({
-+    required MediaServerClient client,
-+    required String serverId,
-+    required String accessToken,
-+  }) async {
-+    _stateController.add(const Authenticating());
-+    try {
-+      client.accessToken = accessToken;
-+      final me = await client.usersApi.getCurrentUser();
-+      return await _handleAuthResult(
-+        result: {'AccessToken': accessToken, 'User': me.raw},
-+        client: client,
-+        serverId: serverId,
-+        fallbackName: '',
-+      );
-+    } on DioException catch (e) {
-+      return _handleDioError(e);
-+    } catch (e) {
-+      _logger.e('Token sign in failed', error: e);
-+      final state = ApiClientError(error: e.toString(), errorType: 'exception');
-+      _stateController.add(state);
-+      return state;
-+    }
-+  }
-+
-   Future<LoginState> authenticateWithQuickConnect({
-     required MediaServerClient client,
-     required String serverId,
 diff --git a/lib/data/services/deep_link_service.dart b/lib/data/services/deep_link_service.dart
 index 8a3dfa96f..475830574 100644
 --- a/lib/data/services/deep_link_service.dart
@@ -124,10 +85,10 @@ index a0f757045..26635964a 100644
  bool receiverAllowsPath(String path) =>
 diff --git a/lib/receiver/receiver_pairing.dart b/lib/receiver/receiver_pairing.dart
 new file mode 100644
-index 000000000..42cf29a5c
+index 000000000..4e054f5cb
 --- /dev/null
 +++ b/lib/receiver/receiver_pairing.dart
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,150 @@
 +import 'dart:async';
 +
 +import 'package:dio/dio.dart';
@@ -146,24 +107,15 @@ index 000000000..42cf29a5c
 +import '../util/platform_detection.dart';
 +import 'receiver_mode.dart';
 +
-+/// How a pairing signs the player in.
-+enum PairingMode {
-+  /// The player starts Quick Connect and Foreseerr approves the code: the
-+  /// player gets a Jellyfin session of its own.
-+  quickConnect,
-+
-+  /// Foreseerr hands over the user's linked token: the player shares
-+  /// Foreseerr's Jellyfin session.
-+  sharedToken,
-+}
-+
 +/// Signs the player in for a Foreseerr user, from a pair link:
 +///
-+/// `<scheme>://pair?foreseerr=<url>&ticket=<ticket>[&mode=token]`
++/// `<scheme>://pair?foreseerr=<url>&ticket=<ticket>`
 +/// `[&id=<itemId>[&startTicks=<ticks>]]`
 +///
-+/// The ticket is single use and short lived. An `id` starts that item once
-+/// signed in.
++/// The player starts Jellyfin Quick Connect and Foreseerr approves the code
++/// as the ticket's user, so the player gets a Jellyfin device and session of
++/// its own. The ticket is single use and short lived. An `id` starts that
++/// item once signed in.
 +class ReceiverPairing {
 +  ReceiverPairing._();
 +
@@ -190,12 +142,9 @@ index 000000000..42cf29a5c
 +    }
 +    if (_busy) return;
 +    _busy = true;
-+    final mode = query['mode'] == 'token'
-+        ? PairingMode.sharedToken
-+        : PairingMode.quickConnect;
 +    status.value = 'Signing in through Foreseerr…';
 +    try {
-+      await _pair(foreseerr, ticket, mode);
++      await _pair(foreseerr, ticket);
 +      status.value = null;
 +      final id = query['id'];
 +      if (id != null && id.isNotEmpty) {
@@ -217,7 +166,7 @@ index 000000000..42cf29a5c
 +    }
 +  }
 +
-+  Future<void> _pair(Uri foreseerr, String ticket, PairingMode mode) async {
++  Future<void> _pair(Uri foreseerr, String ticket) async {
 +    final base = foreseerr.toString().replaceFirst(RegExp(r'/+$'), '');
 +    final api = Dio(
 +      BaseOptions(
@@ -253,36 +202,22 @@ index 000000000..42cf29a5c
 +      serverType: server.serverType,
 +      baseUrl: server.address,
 +    );
-+    final auth = GetIt.instance<AuthRepository>();
-+    final LoginState state;
-+    switch (mode) {
-+      case PairingMode.sharedToken:
-+        final session = (await api.post<Map<String, dynamic>>(
-+          '/token',
-+          data: {'ticket': ticket},
-+        )).data!;
-+        state = await auth.authenticateWithToken(
-+          client: client,
-+          serverId: server.id,
-+          accessToken: session['accessToken'] as String,
-+        );
-+      case PairingMode.quickConnect:
-+        final qc = await client.authApi.initiateQuickConnect();
-+        final code = qc['Code'] as String?;
-+        final secret = qc['Secret'] as String?;
-+        if (code == null || secret == null) {
-+          throw StateError('Jellyfin did not start Quick Connect');
-+        }
-+        await api.post<Object?>(
-+          '/quickconnect',
-+          data: {'ticket': ticket, 'code': code},
-+        );
-+        state = await auth.authenticateWithQuickConnect(
++    final qc = await client.authApi.initiateQuickConnect();
++    final code = qc['Code'] as String?;
++    final secret = qc['Secret'] as String?;
++    if (code == null || secret == null) {
++      throw StateError('Jellyfin did not start Quick Connect');
++    }
++    await api.post<Object?>(
++      '/quickconnect',
++      data: {'ticket': ticket, 'code': code},
++    );
++    final state = await GetIt.instance<AuthRepository>()
++        .authenticateWithQuickConnect(
 +          client: client,
 +          serverId: server.id,
 +          secret: secret,
 +        );
-+    }
 +    if (state is! Authenticated) {
 +      throw StateError('Jellyfin refused the sign in ($state)');
 +    }

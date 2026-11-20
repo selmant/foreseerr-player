@@ -20,28 +20,53 @@ is not modified or forked on GitHub.
 Work happens in `upstream/` on the `foreseerr-player` branch; export after
 committing.
 
-## Receiver mode (patch 0001)
+## Patches
 
-Built in with `--dart-define=RECEIVER_MODE=true`; off otherwise.
+| Patch | What |
+| --- | --- |
+| 0001 | Receiver mode, built in with `--dart-define=RECEIVER_MODE=true` |
+| 0002 | Pairing through Foreseerr |
+| 0003 | Linux rebrand: `org.foreseerr.player`, `foreseerr-player://` |
+| 0004 | Show the window as soon as a play command arrives |
 
-- A Jellyfin remote `PlayNow`, or a `moonfin://play?id=…[&startTicks=…]`
-  link, opens the player straight away. Play links resume from the user's
-  saved position when `startTicks` is absent.
+### Receiver mode
+
+- A Jellyfin remote `PlayNow`, or a `foreseerr-player://play?id=…[&userId=…]`
+  `[&startTicks=…]` link, opens the player straight away. Play links resume
+  from the user's saved position when `startTicks` is absent.
 - Every route other than the players goes to a small idle page.
-- Desktop: the window is shown (fullscreen) while a player is open and
-  hidden once none is. Closing the window leaves the player and hides it;
-  the idle page's Quit really exits.
+- Desktop: the window comes up fullscreen when a play command arrives and
+  hides once no player is open. Closing the window leaves the player and
+  hides it; the idle page's Quit really exits.
+
+### Pairing
+
+`foreseerr-player://pair?foreseerr=<url>&ticket=<ticket>[&id=<itemId>]`
+
+Foreseerr issues the single-use ticket (`POST /api/v1/player/pair-tickets`).
+The player reads the Jellyfin server and user from `/info`, starts Quick
+Connect, and sends the code to `/quickconnect`, where Foreseerr approves it
+with the user's linked Jellyfin token. The player gets a Jellyfin device and
+session of its own; Foreseerr's token never leaves Foreseerr. Needs Quick
+Connect enabled on the Jellyfin server.
+
+Handing the player Foreseerr's own token was tried and dropped: Jellyfin ties
+a device to a token, so the two apps overwrote each other's device, remote
+control turned off for both, and a player sign-out ended Foreseerr's link.
+
+## Build (Linux)
+
+```sh
+./scripts/sync.sh
+cd upstream
+flutter build linux --release --dart-define=DISTRIBUTION_CHANNEL=linux \
+  --dart-define=RECEIVER_MODE=true
+```
 
 ## Planned
 
-1. Hidden pairing: Foreseerr opens a pair link carrying a short-lived,
-   single-use ticket. The player starts Jellyfin Quick Connect itself,
-   hands the code to Foreseerr with the ticket, and Foreseerr approves it
-   with the user's linked Jellyfin token. The player gets its own Jellyfin
-   session; Foreseerr's token never leaves Foreseerr.
-2. Rebrand (name, app ID, `foreseerr-player://` scheme, icon) so it can sit
-   next to an installed Moonfin.
-3. Android: go to the background instead of hiding a window.
+- Android: go to the background instead of hiding a window.
+- Rebrand the client name Jellyfin shows ("Moonfin for Linux") and the icon.
 
 ## License
 
