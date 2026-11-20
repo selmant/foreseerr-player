@@ -1,4 +1,4 @@
-From 33a236f1958d20ad2b37f0dc9945d4baae3a689b Mon Sep 17 00:00:00 2001
+From ab323546f64547b92fad706ef762632dc7e4289b Mon Sep 17 00:00:00 2001
 From: Selman Trabzon <selman.trbzon@gmail.com>
 Date: Sat, 21 Nov 2026 00:28:45 +0300
 Subject: [PATCH 6/6] feat: app mode, foreseerr's web ui in the window between
@@ -13,20 +13,37 @@ address.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
+ lib/app.dart                                 |   5 +-
  lib/main.dart                                |   3 +-
  lib/receiver/foreseerr_web.dart              | 170 ++++++++++
- lib/receiver/receiver_mode.dart              |  46 ++-
+ lib/receiver/receiver_mode.dart              |  56 +++-
  lib/ui/screens/receiver/receiver_screen.dart | 184 +++++++++++
  linux/CMakeLists.txt                         |   1 +
  linux/runner/CMakeLists.txt                  |   2 +
  linux/runner/foreseerr_web.cc                | 310 +++++++++++++++++++
  linux/runner/foreseerr_web.h                 |  16 +
  linux/runner/my_application.cc               |   6 +-
- 9 files changed, 730 insertions(+), 8 deletions(-)
+ 10 files changed, 743 insertions(+), 10 deletions(-)
  create mode 100644 lib/receiver/foreseerr_web.dart
  create mode 100644 linux/runner/foreseerr_web.cc
  create mode 100644 linux/runner/foreseerr_web.h
 
+diff --git a/lib/app.dart b/lib/app.dart
+index fc9af7b3a..82494bf54 100644
+--- a/lib/app.dart
++++ b/lib/app.dart
+@@ -1035,7 +1035,10 @@ class _GlobalShortcutScopeState extends State<_GlobalShortcutScope>
+     try {
+       final prefs = GetIt.instance<UserPreferences>();
+       final isFullScreen = await windowManager.isFullScreen();
+-      await prefs.set(UserPreferences.windowFullscreen, isFullScreen);
++      await prefs.set(
++        UserPreferences.windowFullscreen,
++        ReceiverWindowController.instance.savedFullscreen(isFullScreen),
++      );
+       await prefs.set(UserPreferences.windowMaximized, _isMaximized);
+       // Keep the last windowed bounds. Neither state reports the size the
+       // window would return to, so saving either would lose the real one.
 diff --git a/lib/main.dart b/lib/main.dart
 index e8156e33e..5014824c2 100644
 --- a/lib/main.dart
@@ -218,7 +235,7 @@ index 000000000..04a6b7fe6
 +  }
 +}
 diff --git a/lib/receiver/receiver_mode.dart b/lib/receiver/receiver_mode.dart
-index 5f6112119..9d4d23e0a 100644
+index 5f6112119..3f2f345aa 100644
 --- a/lib/receiver/receiver_mode.dart
 +++ b/lib/receiver/receiver_mode.dart
 @@ -10,6 +10,7 @@ import '../ui/navigation/destinations.dart';
@@ -249,12 +266,12 @@ index 5f6112119..9d4d23e0a 100644
  
 -/// Shows the window while a player is open and hides it once none is.
 +/// Shows the window while a player is open and hides it once none is. In
-+/// app mode ([ForeseerrWeb]) the window stays: Foreseerr comes back instead,
-+/// windowed again if it was before the play.
++/// app mode ([ForeseerrWeb]) the window stays as it is: Foreseerr comes back
++/// instead, windowed again if the player was made fullscreen.
  class ReceiverWindowController {
    ReceiverWindowController._();
  
-@@ -61,9 +71,12 @@ class ReceiverWindowController {
+@@ -61,9 +71,18 @@ class ReceiverWindowController {
    bool _started = false;
    bool _quitting = false;
    Timer? _hideTimer;
@@ -263,13 +280,19 @@ index 5f6112119..9d4d23e0a 100644
  
 -  /// Whether a window close should really quit, as opposed to hiding.
 -  bool get quitting => _quitting;
++  /// The fullscreen state to remember for the next start, given the
++  /// window's [actual] one. In app mode the player's fullscreen is not the
++  /// app's: while it has the window, this is the state from before the play.
++  bool savedFullscreen(bool actual) =>
++      ForeseerrWeb.supported && _inPlay ? !_restoreWindowed : actual;
++
 +  /// Whether a window close should really quit, as opposed to hiding. In
 +  /// app mode it always does.
 +  bool get quitting => _quitting || ForeseerrWeb.supported;
  
    void start() {
      if (!receiverModeEnabled || !PlatformDetection.isDesktop || _started) {
-@@ -71,6 +84,7 @@ class ReceiverWindowController {
+@@ -71,6 +90,7 @@ class ReceiverWindowController {
      }
      _started = true;
      PlayerRouteObserver.instance.isPlayerActive.addListener(_onPlayerChanged);
@@ -277,7 +300,7 @@ index 5f6112119..9d4d23e0a 100644
    }
  
    void _onPlayerChanged() {
-@@ -82,7 +96,10 @@ class ReceiverWindowController {
+@@ -82,7 +102,10 @@ class ReceiverWindowController {
      // One player replacing another (next episode, next up) passes through
      // "no player" for a moment, so only hide once that has settled.
      _hideTimer = Timer(const Duration(milliseconds: 800), () {
@@ -289,7 +312,7 @@ index 5f6112119..9d4d23e0a 100644
          unawaited(hide());
        }
      });
-@@ -97,6 +114,13 @@ class ReceiverWindowController {
+@@ -97,6 +120,13 @@ class ReceiverWindowController {
      if (!receiverModeEnabled || !PlatformDetection.isDesktop) return;
      _hideTimer?.cancel();
      try {
@@ -303,7 +326,18 @@ index 5f6112119..9d4d23e0a 100644
        if (!await windowManager.isVisible()) {
          await windowManager.show();
          if (!await _becomesVisible()) {
-@@ -128,6 +152,20 @@ class ReceiverWindowController {
+@@ -108,7 +138,9 @@ class ReceiverWindowController {
+       }
+       await windowManager.focus();
+       final visible = await windowManager.isVisible();
+-      if (!await FullscreenHelper.isFullscreen()) {
++      // App mode plays in the window as it is: fullscreen only when the
++      // app already was.
++      if (!ForeseerrWeb.supported && !await FullscreenHelper.isFullscreen()) {
+         await FullscreenHelper.setFullscreen(true);
+       }
+       debugPrint(
+@@ -128,6 +160,20 @@ class ReceiverWindowController {
      return false;
    }
  

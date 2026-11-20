@@ -47,8 +47,10 @@ committing.
   fullscreen. `FORESEERR_WEB_DEVTOOLS=1` turns on the web inspector.
 - On NVIDIA the page uses WebKit's shared-memory renderer: the DMA-BUF one
   spins and eats memory there (WebKitGTK 2.54, Wayland).
-- Playback goes fullscreen; afterwards Foreseerr comes back, windowed again
-  if it was. Closing the window quits.
+- Playback stays in the window as it is: fullscreen only if the app already
+  was. Made fullscreen from the player, the window goes back to windowed for
+  Foreseerr afterwards, and the next start opens windowed too. Closing the
+  window quits.
 
 ### Receiver mode
 
