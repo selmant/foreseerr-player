@@ -45,6 +45,8 @@ committing.
 - Links out of Foreseerr (TMDB, IMDb, …) open in the browser. Alt+Left/Right
   or the mouse's side buttons go back and forward, F5 reloads, F11 toggles
   fullscreen. `FORESEERR_WEB_DEVTOOLS=1` turns on the web inspector.
+- On NVIDIA the page uses WebKit's shared-memory renderer: the DMA-BUF one
+  spins and eats memory there (WebKitGTK 2.54, Wayland).
 - Playback goes fullscreen; afterwards Foreseerr comes back, windowed again
   if it was. Closing the window quits.
 
