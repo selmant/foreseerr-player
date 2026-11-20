@@ -31,8 +31,8 @@ mkdir -p "$apps"
 cat > "$entry" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Foreseerr Player
-Comment=Player for Foreseerr
+Name=Foreseerr
+Comment=Foreseerr, with its own player
 Exec=$binary %U
 Icon=$bundle/data/flutter_assets/assets/icons/moonfin.png
 Categories=AudioVideo;Video;

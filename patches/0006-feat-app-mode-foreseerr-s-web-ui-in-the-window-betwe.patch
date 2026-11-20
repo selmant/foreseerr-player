@@ -1,0 +1,932 @@
+From 3fd9a251f58b1761fefd68cfc24d420a55033bff Mon Sep 17 00:00:00 2001
+From: Selman Trabzon <selman.trbzon@gmail.com>
+Date: Sat, 21 Nov 2026 00:28:45 +0300
+Subject: [PATCH 6/6] feat: app mode, foreseerr's web ui in the window between
+ plays
+
+On Linux the receiver build is now the Foreseerr app: a WebKitGTK view over
+the Flutter view loads Foreseerr from its server and hands play links to the
+player directly. The player takes the window while something plays, then
+Foreseerr comes back, windowed again if it was. The page keeps its own
+cookies and storage, so Foreseerr stays signed in. First run asks for the
+address.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ lib/main.dart                                |   3 +-
+ lib/receiver/foreseerr_web.dart              | 170 +++++++++++
+ lib/receiver/receiver_mode.dart              |  46 ++-
+ lib/ui/screens/receiver/receiver_screen.dart | 184 +++++++++++
+ linux/CMakeLists.txt                         |   1 +
+ linux/runner/CMakeLists.txt                  |   2 +
+ linux/runner/foreseerr_web.cc                | 304 +++++++++++++++++++
+ linux/runner/foreseerr_web.h                 |  16 +
+ linux/runner/my_application.cc               |   6 +-
+ 9 files changed, 724 insertions(+), 8 deletions(-)
+ create mode 100644 lib/receiver/foreseerr_web.dart
+ create mode 100644 linux/runner/foreseerr_web.cc
+ create mode 100644 linux/runner/foreseerr_web.h
+
+diff --git a/lib/main.dart b/lib/main.dart
+index e8156e33e..5014824c2 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -866,8 +866,7 @@ Future<void> autoDownloadBackgroundMain() =>
+     auto_download_bg.autoDownloadBackgroundMain();
+ 
+ void main(List<String> args) async {
+-  receiverLaunchedWithLink =
+-      receiverModeEnabled && args.any((a) => a.startsWith('$appLinkScheme:'));
++  receiverLaunchedWithLink = receiverLinkLaunch(args);
+   if (PlatformDetection.isFlatpak) installFlatpakPortals();
+   configureHttpOverrides();
+   ScrollSensitivityBinding.ensureInitialized();
+diff --git a/lib/receiver/foreseerr_web.dart b/lib/receiver/foreseerr_web.dart
+new file mode 100644
+index 000000000..04a6b7fe6
+--- /dev/null
++++ b/lib/receiver/foreseerr_web.dart
+@@ -0,0 +1,170 @@
++import 'dart:async';
++import 'dart:io' show Platform;
++
++import 'package:dio/dio.dart';
++import 'package:flutter/foundation.dart';
++import 'package:flutter/services.dart';
++import 'package:shared_preferences/shared_preferences.dart';
++
++import '../ui/navigation/app_router.dart' show PlayerRouteObserver;
++import 'receiver_mode.dart';
++import 'receiver_pairing.dart';
++
++/// App mode: the window is Foreseerr. Foreseerr's own web UI, loaded from
++/// its server, fills the window between plays, and the player takes over
++/// while something plays. Play buttons in the page hand their open link to
++/// the player directly (see `linux/runner/foreseerr_web.cc`).
++///
++/// Linux only for now; elsewhere receiver mode stays a hidden player.
++class ForeseerrWeb {
++  ForeseerrWeb._();
++
++  static final instance = ForeseerrWeb._();
++
++  static const _channel = MethodChannel('foreseerr/web');
++  static const _urlKey = 'foreseerr.url';
++
++  static bool get supported =>
++      receiverModeEnabled && !kIsWeb && Platform.isLinux;
++
++  /// The Foreseerr address, or null before setup.
++  final ValueNotifier<String?> url = ValueNotifier<String?>(null);
++
++  /// Why the page could not be loaded.
++  final ValueNotifier<String?> error = ValueNotifier<String?>(null);
++
++  bool _started = false;
++  bool _shown = false;
++  bool _playing = false;
++  Timer? _playTimeout;
++
++  Future<void> start() async {
++    if (!supported || _started) return;
++    _started = true;
++    _channel.setMethodCallHandler(_onCall);
++    ReceiverPairing.instance.status.addListener(_sync);
++    PlayerRouteObserver.instance.isPlayerActive.addListener(_sync);
++    final saved = (await SharedPreferences.getInstance()).getString(_urlKey);
++    if (saved != null) await _load(saved);
++  }
++
++  /// Checks that [address] is a Foreseerr server, then saves and opens it.
++  /// Returns why not, or null.
++  Future<String?> connect(String address) async {
++    var text = address.trim().replaceFirst(RegExp(r'/+$'), '');
++    if (!text.contains('://')) text = 'https://$text';
++    final uri = Uri.tryParse(text);
++    if (uri == null ||
++        !(uri.isScheme('http') || uri.isScheme('https')) ||
++        uri.host.isEmpty) {
++      return 'That is not a web address.';
++    }
++    try {
++      final status = await Dio(
++        BaseOptions(
++          connectTimeout: const Duration(seconds: 10),
++          receiveTimeout: const Duration(seconds: 10),
++        ),
++      ).get<Object?>('$text/api/v1/status');
++      final data = status.data;
++      if (data is! Map || data['version'] == null) {
++        return 'No Foreseerr at $text.';
++      }
++    } on DioException catch (e) {
++      return 'Could not reach $text: ${e.message ?? e.type.name}';
++    }
++    await (await SharedPreferences.getInstance()).setString(_urlKey, text);
++    await _load(text);
++    return null;
++  }
++
++  /// Back to setup, to use another address.
++  Future<void> forget() async {
++    await (await SharedPreferences.getInstance()).remove(_urlKey);
++    url.value = null;
++    error.value = null;
++    _sync();
++  }
++
++  Future<void> retry() async {
++    final current = url.value;
++    if (current != null) await _load(current);
++  }
++
++  Future<void> _load(String address) async {
++    url.value = address;
++    error.value = null;
++    try {
++      await _channel.invokeMethod<void>('load', {'url': address});
++    } on PlatformException catch (e) {
++      error.value = e.message ?? e.code;
++    }
++    _sync();
++  }
++
++  /// A play is starting: the player takes the window.
++  void playerRequested() {
++    _playing = true;
++    _playTimeout?.cancel();
++    // A play that never opens a player must not leave Foreseerr hidden.
++    _playTimeout = Timer(const Duration(seconds: 20), () {
++      if (!PlayerRouteObserver.instance.isPlayerActive.value) playerClosed();
++    });
++    _sync();
++  }
++
++  /// The player is gone for good: Foreseerr comes back.
++  void playerClosed() {
++    _playTimeout?.cancel();
++    _playing = false;
++    _sync();
++  }
++
++  void _sync() {
++    final show =
++        url.value != null &&
++        error.value == null &&
++        ReceiverPairing.instance.status.value == null &&
++        !_playing &&
++        !PlayerRouteObserver.instance.isPlayerActive.value;
++    if (show == _shown) return;
++    _shown = show;
++    _channel.invokeMethod<void>('show', show).catchError((Object e) {
++      debugPrint('[Foreseerr] show failed: $e');
++    });
++  }
++
++  Future<Object?> _onCall(MethodCall call) async {
++    switch (call.method) {
++      case 'open':
++        final link = Uri.tryParse(call.arguments as String? ?? '');
++        if (link != null && _isOwnLink(link)) {
++          unawaited(ReceiverPairing.instance.handle(link));
++        }
++      case 'loadFailed':
++        error.value = call.arguments as String? ?? 'unknown error';
++        _sync();
++    }
++    return null;
++  }
++
++  /// Only links for this Foreseerr: a page elsewhere can't point the
++  /// player at another server.
++  bool _isOwnLink(Uri link) {
++    if (!link.isScheme(appLinkScheme) || !ReceiverPairing.isOpenLink(link)) {
++      return false;
++    }
++    final home = _origin(url.value);
++    return home != null && home == _origin(link.queryParameters['foreseerr']);
++  }
++
++  static String? _origin(String? address) {
++    final uri = Uri.tryParse(address ?? '');
++    if (uri == null || uri.host.isEmpty) return null;
++    try {
++      return uri.origin.toLowerCase();
++    } on StateError {
++      return null;
++    }
++  }
++}
+diff --git a/lib/receiver/receiver_mode.dart b/lib/receiver/receiver_mode.dart
+index 5f6112119..9d4d23e0a 100644
+--- a/lib/receiver/receiver_mode.dart
++++ b/lib/receiver/receiver_mode.dart
+@@ -10,6 +10,7 @@ import '../ui/navigation/destinations.dart';
+ import '../util/app_exit.dart';
+ import '../util/fullscreen_helper.dart';
+ import '../util/platform_detection.dart';
++import 'foreseerr_web.dart';
+ 
+ /// Receiver mode turns the app into a player that other apps drive: a
+ /// Jellyfin remote `PlayNow` or a play link opens the player, and nothing
+@@ -26,6 +27,13 @@ const String appLinkScheme = 'foreseerr-player';
+ /// shows no idle page.
+ bool receiverLaunchedWithLink = false;
+ 
++/// Whether [args] start a run by link. App mode shows Foreseerr first
++/// either way, so it never counts.
++bool receiverLinkLaunch(List<String> args) =>
++    receiverModeEnabled &&
++    !ForeseerrWeb.supported &&
++    args.any((a) => a.startsWith('$appLinkScheme:'));
++
+ /// Routes receiver mode still allows: signing in, its own idle page and the
+ /// players. Everything else lands on the idle page.
+ bool receiverAllowsPath(String path) =>
+@@ -52,7 +60,9 @@ Future<void> receiverPlay(({String itemId, int? startTicks}) target) =>
+       target.itemId,
+     ], startPositionTicks: target.startTicks);
+ 
+-/// Shows the window while a player is open and hides it once none is.
++/// Shows the window while a player is open and hides it once none is. In
++/// app mode ([ForeseerrWeb]) the window stays: Foreseerr comes back instead,
++/// windowed again if it was before the play.
+ class ReceiverWindowController {
+   ReceiverWindowController._();
+ 
+@@ -61,9 +71,12 @@ class ReceiverWindowController {
+   bool _started = false;
+   bool _quitting = false;
+   Timer? _hideTimer;
++  bool _inPlay = false;
++  bool _restoreWindowed = false;
+ 
+-  /// Whether a window close should really quit, as opposed to hiding.
+-  bool get quitting => _quitting;
++  /// Whether a window close should really quit, as opposed to hiding. In
++  /// app mode it always does.
++  bool get quitting => _quitting || ForeseerrWeb.supported;
+ 
+   void start() {
+     if (!receiverModeEnabled || !PlatformDetection.isDesktop || _started) {
+@@ -71,6 +84,7 @@ class ReceiverWindowController {
+     }
+     _started = true;
+     PlayerRouteObserver.instance.isPlayerActive.addListener(_onPlayerChanged);
++    unawaited(ForeseerrWeb.instance.start());
+   }
+ 
+   void _onPlayerChanged() {
+@@ -82,7 +96,10 @@ class ReceiverWindowController {
+     // One player replacing another (next episode, next up) passes through
+     // "no player" for a moment, so only hide once that has settled.
+     _hideTimer = Timer(const Duration(milliseconds: 800), () {
+-      if (!PlayerRouteObserver.instance.isPlayerActive.value) {
++      if (PlayerRouteObserver.instance.isPlayerActive.value) return;
++      if (ForeseerrWeb.supported) {
++        unawaited(_leavePlayer());
++      } else {
+         unawaited(hide());
+       }
+     });
+@@ -97,6 +114,13 @@ class ReceiverWindowController {
+     if (!receiverModeEnabled || !PlatformDetection.isDesktop) return;
+     _hideTimer?.cancel();
+     try {
++      if (ForeseerrWeb.supported) {
++        if (!_inPlay) {
++          _inPlay = true;
++          _restoreWindowed = !await FullscreenHelper.isFullscreen();
++        }
++        ForeseerrWeb.instance.playerRequested();
++      }
+       if (!await windowManager.isVisible()) {
+         await windowManager.show();
+         if (!await _becomesVisible()) {
+@@ -128,6 +152,20 @@ class ReceiverWindowController {
+     return false;
+   }
+ 
++  /// App mode: hands the window back to Foreseerr.
++  Future<void> _leavePlayer() async {
++    final restore = _inPlay && _restoreWindowed;
++    _inPlay = false;
++    try {
++      if (restore && await FullscreenHelper.isFullscreen()) {
++        await FullscreenHelper.setFullscreen(false);
++      }
++    } catch (e) {
++      debugPrint('[Receiver] leaving fullscreen failed: $e');
++    }
++    ForeseerrWeb.instance.playerClosed();
++  }
++
+   /// Hides the window and leaves fullscreen as it is, so the next play
+   /// comes back fullscreen without a second request.
+   Future<void> hide() async {
+diff --git a/lib/ui/screens/receiver/receiver_screen.dart b/lib/ui/screens/receiver/receiver_screen.dart
+index 19de1526b..c04da5620 100644
+--- a/lib/ui/screens/receiver/receiver_screen.dart
++++ b/lib/ui/screens/receiver/receiver_screen.dart
+@@ -5,6 +5,7 @@ import '../../../auth/models/server.dart';
+ import '../../../auth/models/user.dart';
+ import '../../../auth/repositories/server_repository.dart';
+ import '../../../auth/repositories/user_repository.dart';
++import '../../../receiver/foreseerr_web.dart';
+ import '../../../receiver/receiver_mode.dart';
+ import '../../../receiver/receiver_pairing.dart';
+ 
+@@ -15,6 +16,7 @@ class ReceiverScreen extends StatelessWidget {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (ForeseerrWeb.supported) return const _AppModeScreen();
+     final user = GetIt.instance<UserRepository>().currentUser;
+     final server = user == null
+         ? null
+@@ -114,3 +116,185 @@ class ReceiverScreen extends StatelessWidget {
+     );
+   }
+ }
++
++/// What app mode shows under Foreseerr's page: nothing while the page or
++/// the player is up, otherwise setup, a load failure, or sign-in progress.
++class _AppModeScreen extends StatefulWidget {
++  const _AppModeScreen();
++
++  @override
++  State<_AppModeScreen> createState() => _AppModeScreenState();
++}
++
++class _AppModeScreenState extends State<_AppModeScreen> {
++  final _address = TextEditingController();
++  String? _setupError;
++  bool _connecting = false;
++
++  @override
++  void dispose() {
++    _address.dispose();
++    super.dispose();
++  }
++
++  Future<void> _connect() async {
++    if (_connecting) return;
++    setState(() {
++      _connecting = true;
++      _setupError = null;
++    });
++    final error = await ForeseerrWeb.instance.connect(_address.text);
++    if (!mounted) return;
++    setState(() {
++      _connecting = false;
++      _setupError = error;
++    });
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final web = ForeseerrWeb.instance;
++    final pairing = ReceiverPairing.instance;
++    return Scaffold(
++      backgroundColor: Colors.black,
++      body: ListenableBuilder(
++        listenable: Listenable.merge([
++          web.url,
++          web.error,
++          pairing.status,
++          pairing.busy,
++        ]),
++        builder: (context, _) {
++          final status = pairing.status.value;
++          if (status != null) {
++            return _message(
++              context,
++              title: 'Foreseerr',
++              body: status,
++              actions: [
++                if (!pairing.busy.value)
++                  FilledButton(
++                    autofocus: true,
++                    onPressed: () => pairing.status.value = null,
++                    child: const Text('Back to Foreseerr'),
++                  ),
++              ],
++            );
++          }
++          final url = web.url.value;
++          if (url == null) return _setup(context);
++          final error = web.error.value;
++          if (error != null) {
++            return _message(
++              context,
++              title: 'Could not open Foreseerr',
++              body: '$url\n$error',
++              actions: [
++                FilledButton(
++                  autofocus: true,
++                  onPressed: web.retry,
++                  child: const Text('Retry'),
++                ),
++                OutlinedButton(
++                  onPressed: () {
++                    _address.text = url;
++                    web.forget();
++                  },
++                  child: const Text('Change address'),
++                ),
++              ],
++            );
++          }
++          return const SizedBox.expand();
++        },
++      ),
++    );
++  }
++
++  Widget _setup(BuildContext context) {
++    final theme = Theme.of(context);
++    return Center(
++      child: ConstrainedBox(
++        constraints: const BoxConstraints(maxWidth: 420),
++        child: Padding(
++          padding: const EdgeInsets.all(24),
++          child: Column(
++            mainAxisSize: MainAxisSize.min,
++            crossAxisAlignment: CrossAxisAlignment.stretch,
++            children: [
++              Text(
++                'Foreseerr',
++                textAlign: TextAlign.center,
++                style: theme.textTheme.headlineSmall?.copyWith(
++                  color: Colors.white,
++                ),
++              ),
++              const SizedBox(height: 8),
++              Text(
++                "Your Foreseerr server's address",
++                textAlign: TextAlign.center,
++                style: theme.textTheme.bodyMedium?.copyWith(
++                  color: Colors.white70,
++                ),
++              ),
++              const SizedBox(height: 20),
++              TextField(
++                controller: _address,
++                autofocus: true,
++                enabled: !_connecting,
++                keyboardType: TextInputType.url,
++                style: const TextStyle(color: Colors.white),
++                decoration: InputDecoration(
++                  hintText: 'https://foreseerr.example.com',
++                  errorText: _setupError,
++                  errorMaxLines: 3,
++                ),
++                onSubmitted: (_) => _connect(),
++              ),
++              const SizedBox(height: 16),
++              FilledButton(
++                onPressed: _connecting ? null : _connect,
++                child: Text(_connecting ? 'Connecting…' : 'Connect'),
++              ),
++            ],
++          ),
++        ),
++      ),
++    );
++  }
++
++  Widget _message(
++    BuildContext context, {
++    required String title,
++    required String body,
++    required List<Widget> actions,
++  }) {
++    final theme = Theme.of(context);
++    return Center(
++      child: Padding(
++        padding: const EdgeInsets.all(24),
++        child: Column(
++          mainAxisSize: MainAxisSize.min,
++          children: [
++            Text(
++              title,
++              style: theme.textTheme.headlineSmall?.copyWith(
++                color: Colors.white,
++              ),
++            ),
++            const SizedBox(height: 12),
++            Text(
++              body,
++              textAlign: TextAlign.center,
++              style: theme.textTheme.bodyMedium?.copyWith(
++                color: Colors.white70,
++              ),
++            ),
++            const SizedBox(height: 24),
++            Wrap(spacing: 12, children: actions),
++          ],
++        ),
++      ),
++    );
++  }
++}
+diff --git a/linux/CMakeLists.txt b/linux/CMakeLists.txt
+index 8a6f10c18..2f3d8fefb 100644
+--- a/linux/CMakeLists.txt
++++ b/linux/CMakeLists.txt
+@@ -49,6 +49,7 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
+ # System-level dependencies.
+ find_package(PkgConfig REQUIRED)
+ pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
++pkg_check_modules(WEBKIT REQUIRED IMPORTED_TARGET webkit2gtk-4.1)
+ 
+ # Shared libretro host and its desktop audio sink, linked into the runner.
+ set(LIBRETRO_HOST_AUDIO ON CACHE BOOL "" FORCE)
+diff --git a/linux/runner/CMakeLists.txt b/linux/runner/CMakeLists.txt
+index 9d71e1ab2..d936416fd 100644
+--- a/linux/runner/CMakeLists.txt
++++ b/linux/runner/CMakeLists.txt
+@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
+ add_executable(${BINARY_NAME}
+   "main.cc"
+   "my_application.cc"
++  "foreseerr_web.cc"
+   "native_game.cc"
+   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
+ )
+@@ -23,6 +24,7 @@ add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
+ # Add dependency libraries. Add any application-specific dependencies here.
+ target_link_libraries(${BINARY_NAME} PRIVATE flutter)
+ target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
++target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::WEBKIT)
+ target_link_libraries(${BINARY_NAME} PRIVATE libretro_host lh_audio)
+ 
+ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+diff --git a/linux/runner/foreseerr_web.cc b/linux/runner/foreseerr_web.cc
+new file mode 100644
+index 000000000..8354690b8
+--- /dev/null
++++ b/linux/runner/foreseerr_web.cc
+@@ -0,0 +1,304 @@
++#include "foreseerr_web.h"
++
++#include <gdk/gdkkeysyms.h>
++#include <webkit2/webkit2.h>
++
++// The WebKitGTK 4.1 API this uses (website data manager, persistent cookie
++// storage) is deprecated in newer releases, but still the only way there.
++#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
++
++namespace {
++
++constexpr char kLinkScheme[] = "foreseerr-player:";
++
++// Runs in Foreseerr's pages only. Turns on the play handoff and keeps
++// Foreseerr's in-app chrome (the Back button), which a browser tab hides.
++constexpr char kBridgeScript[] = R"js((() => {
++  try { localStorage.setItem('foreseerrPlayer.enabled', 'true'); } catch (e) {}
++  const mark = () => {
++    const root = document.documentElement;
++    if (root && !root.classList.contains('native-shell')) {
++      root.classList.add('native-shell');
++    }
++  };
++  mark();
++  const root = document.documentElement;
++  if (root) {
++    new MutationObserver(mark).observe(root, {
++      attributes: true,
++      attributeFilter: ['class'],
++    });
++  }
++})();)js";
++
++GtkWidget* overlay = nullptr;
++FlView* flutter_view = nullptr;
++WebKitWebView* web = nullptr;
++WebKitUserContentManager* content = nullptr;
++FlMethodChannel* channel = nullptr;
++gchar* home_origin = nullptr;
++
++// scheme://host[:port], without default ports; null for non-network URIs.
++gchar* OriginOf(const gchar* uri) {
++  g_autoptr(GUri) parsed = g_uri_parse(uri, G_URI_FLAGS_NONE, nullptr);
++  if (parsed == nullptr) return nullptr;
++  const gchar* scheme = g_uri_get_scheme(parsed);
++  const gchar* host = g_uri_get_host(parsed);
++  if (scheme == nullptr || host == nullptr || *host == '\0') return nullptr;
++  g_autofree gchar* lower_scheme = g_ascii_strdown(scheme, -1);
++  g_autofree gchar* lower_host = g_ascii_strdown(host, -1);
++  int port = g_uri_get_port(parsed);
++  bool default_port = port == -1 ||
++                      (port == 80 && g_str_equal(lower_scheme, "http")) ||
++                      (port == 443 && g_str_equal(lower_scheme, "https"));
++  if (default_port) return g_strdup_printf("%s://%s", lower_scheme, lower_host);
++  return g_strdup_printf("%s://%s:%d", lower_scheme, lower_host, port);
++}
++
++bool IsHome(const gchar* uri) {
++  if (home_origin == nullptr || uri == nullptr) return false;
++  g_autofree gchar* origin = OriginOf(uri);
++  return origin != nullptr && g_str_equal(origin, home_origin);
++}
++
++bool IsWebUri(const gchar* uri) {
++  return g_str_has_prefix(uri, "https://") || g_str_has_prefix(uri, "http://");
++}
++
++void Notify(const gchar* method, const gchar* argument) {
++  if (channel == nullptr) return;
++  g_autoptr(FlValue) value = fl_value_new_string(argument);
++  fl_method_channel_invoke_method(channel, method, value, nullptr, nullptr,
++                                  nullptr);
++}
++
++void OpenExternally(const gchar* uri) {
++  g_autoptr(GError) error = nullptr;
++  if (!g_app_info_launch_default_for_uri(uri, nullptr, &error)) {
++    g_warning("Could not open %s: %s", uri, error->message);
++  }
++}
++
++gboolean OnDecidePolicy(WebKitWebView* view, WebKitPolicyDecision* decision,
++                        WebKitPolicyDecisionType type, gpointer) {
++  if (type == WEBKIT_POLICY_DECISION_TYPE_RESPONSE) return FALSE;
++  WebKitNavigationAction* action =
++      webkit_navigation_policy_decision_get_navigation_action(
++          WEBKIT_NAVIGATION_POLICY_DECISION(decision));
++  const gchar* uri =
++      webkit_uri_request_get_uri(webkit_navigation_action_get_request(action));
++  if (uri == nullptr) return FALSE;
++
++  // Foreseerr's play handoff: the player takes it from here.
++  if (g_str_has_prefix(uri, kLinkScheme)) {
++    webkit_policy_decision_ignore(decision);
++    if (IsHome(webkit_web_view_get_uri(view))) Notify("open", uri);
++    return TRUE;
++  }
++
++  bool new_window = type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION;
++  if (new_window && IsHome(uri)) {
++    // There is one window: Foreseerr's own pages open in it.
++    webkit_policy_decision_ignore(decision);
++    webkit_web_view_load_uri(view, uri);
++    return TRUE;
++  }
++  // Links out of Foreseerr (TMDB, IMDb, trailers) go to the browser.
++  bool clicked_out =
++      !IsHome(uri) && webkit_navigation_action_is_user_gesture(action);
++  if ((new_window || clicked_out) && IsWebUri(uri)) {
++    webkit_policy_decision_ignore(decision);
++    OpenExternally(uri);
++    return TRUE;
++  }
++  return FALSE;
++}
++
++gboolean OnLoadFailed(WebKitWebView*, WebKitLoadEvent, gchar*, GError* error,
++                      gpointer) {
++  if (g_error_matches(error, WEBKIT_NETWORK_ERROR,
++                      WEBKIT_NETWORK_ERROR_CANCELLED) ||
++      g_error_matches(error, WEBKIT_POLICY_ERROR,
++                      WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE)) {
++    return FALSE;
++  }
++  Notify("loadFailed", error->message);
++  // The app shows its own page with a retry instead of WebKit's.
++  return TRUE;
++}
++
++void OnWebProcessTerminated(WebKitWebView* view,
++                            WebKitWebProcessTerminationReason, gpointer) {
++  webkit_web_view_reload(view);
++}
++
++void ToggleFullscreen() {
++  GtkWidget* toplevel = gtk_widget_get_toplevel(GTK_WIDGET(web));
++  GdkWindow* window = gtk_widget_get_window(toplevel);
++  if (window == nullptr) return;
++  if (gdk_window_get_state(window) & GDK_WINDOW_STATE_FULLSCREEN) {
++    gtk_window_unfullscreen(GTK_WINDOW(toplevel));
++  } else {
++    gtk_window_fullscreen(GTK_WINDOW(toplevel));
++  }
++}
++
++gboolean OnKeyPress(GtkWidget*, GdkEventKey* event, gpointer) {
++  guint mods = event->state & gtk_accelerator_get_default_mod_mask();
++  if (mods == GDK_MOD1_MASK && event->keyval == GDK_KEY_Left) {
++    webkit_web_view_go_back(web);
++    return TRUE;
++  }
++  if (mods == GDK_MOD1_MASK && event->keyval == GDK_KEY_Right) {
++    webkit_web_view_go_forward(web);
++    return TRUE;
++  }
++  if ((mods == 0 && event->keyval == GDK_KEY_F5) ||
++      (mods == GDK_CONTROL_MASK && event->keyval == GDK_KEY_r)) {
++    webkit_web_view_reload(web);
++    return TRUE;
++  }
++  if (mods == 0 && event->keyval == GDK_KEY_F11) {
++    ToggleFullscreen();
++    return TRUE;
++  }
++  return FALSE;
++}
++
++gboolean OnButtonPress(GtkWidget*, GdkEventButton* event, gpointer) {
++  if (event->type != GDK_BUTTON_PRESS) return FALSE;
++  if (event->button == 8) {
++    webkit_web_view_go_back(web);
++    return TRUE;
++  }
++  if (event->button == 9) {
++    webkit_web_view_go_forward(web);
++    return TRUE;
++  }
++  return FALSE;
++}
++
++// The web view keeps its own cookies and storage under the app's data
++// directory, so Foreseerr stays signed in across runs.
++void EnsureWebView() {
++  if (web != nullptr) return;
++  g_autofree gchar* data_dir =
++      g_build_filename(g_get_user_data_dir(), APPLICATION_ID, "web", nullptr);
++  g_autofree gchar* cache_dir =
++      g_build_filename(g_get_user_cache_dir(), APPLICATION_ID, "web", nullptr);
++  g_autofree gchar* cookie_file =
++      g_build_filename(data_dir, "cookies.sqlite", nullptr);
++  g_mkdir_with_parents(data_dir, 0700);
++
++  WebKitWebsiteDataManager* data = webkit_website_data_manager_new(
++      "base-data-directory", data_dir, "base-cache-directory", cache_dir,
++      nullptr);
++  webkit_cookie_manager_set_persistent_storage(
++      webkit_website_data_manager_get_cookie_manager(data), cookie_file,
++      WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE);
++  WebKitWebContext* context =
++      webkit_web_context_new_with_website_data_manager(data);
++  g_object_unref(data);
++
++  content = webkit_user_content_manager_new();
++  web = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "web-context",
++                                     context, "user-content-manager", content,
++                                     nullptr));
++  g_object_unref(context);
++
++  WebKitSettings* settings = webkit_web_view_get_settings(web);
++  webkit_settings_set_user_agent_with_application_details(
++      settings, "ForeseerrPlayer", nullptr);
++  webkit_settings_set_enable_developer_extras(
++      settings, g_getenv("FORESEERR_WEB_DEVTOOLS") != nullptr);
++  GdkRGBA background = {0.067, 0.094, 0.153, 1.0};  // Foreseerr's gray-900
++  webkit_web_view_set_background_color(web, &background);
++
++  g_signal_connect(web, "decide-policy", G_CALLBACK(OnDecidePolicy), nullptr);
++  g_signal_connect(web, "load-failed", G_CALLBACK(OnLoadFailed), nullptr);
++  g_signal_connect(web, "web-process-terminated",
++                   G_CALLBACK(OnWebProcessTerminated), nullptr);
++  g_signal_connect(web, "key-press-event", G_CALLBACK(OnKeyPress), nullptr);
++  g_signal_connect(web, "button-press-event", G_CALLBACK(OnButtonPress),
++                   nullptr);
++
++  gtk_overlay_add_overlay(GTK_OVERLAY(overlay), GTK_WIDGET(web));
++}
++
++void Load(const gchar* url) {
++  EnsureWebView();
++  g_free(home_origin);
++  home_origin = OriginOf(url);
++
++  webkit_user_content_manager_remove_all_scripts(content);
++  if (home_origin != nullptr) {
++    g_autofree gchar* pattern = g_strdup_printf("%s/*", home_origin);
++    const gchar* allow[] = {pattern, nullptr};
++    WebKitUserScript* script = webkit_user_script_new(
++        kBridgeScript, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
++        WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, allow, nullptr);
++    webkit_user_content_manager_add_script(content, script);
++    webkit_user_script_unref(script);
++  }
++  webkit_web_view_load_uri(web, url);
++}
++
++void Show(bool visible) {
++  if (web == nullptr) return;
++  // A page hidden behind the player stays quiet (trailers, previews).
++  webkit_web_view_set_is_muted(web, !visible);
++  if (visible) {
++    gtk_widget_show(GTK_WIDGET(web));
++    gtk_widget_grab_focus(GTK_WIDGET(web));
++  } else {
++    gtk_widget_hide(GTK_WIDGET(web));
++    gtk_widget_grab_focus(GTK_WIDGET(flutter_view));
++  }
++}
++
++void HandleMethod(FlMethodChannel*, FlMethodCall* call, gpointer) {
++  const gchar* method = fl_method_call_get_name(call);
++  FlValue* args = fl_method_call_get_args(call);
++  g_autoptr(FlMethodResponse) response = nullptr;
++
++  if (g_str_equal(method, "load")) {
++    FlValue* url = args != nullptr && fl_value_get_type(args) == FL_VALUE_TYPE_MAP
++                       ? fl_value_lookup_string(args, "url")
++                       : nullptr;
++    if (url == nullptr || fl_value_get_type(url) != FL_VALUE_TYPE_STRING) {
++      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
++          "bad_args", "load needs a url", nullptr));
++    } else {
++      Load(fl_value_get_string(url));
++      response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
++    }
++  } else if (g_str_equal(method, "show")) {
++    Show(args != nullptr && fl_value_get_type(args) == FL_VALUE_TYPE_BOOL &&
++         fl_value_get_bool(args));
++    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
++  } else if (g_str_equal(method, "reload")) {
++    if (web != nullptr) webkit_web_view_reload(web);
++    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
++  } else {
++    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
++  }
++  fl_method_call_respond(call, response, nullptr);
++}
++
++}  // namespace
++
++GtkWidget* foreseerr_web_wrap(FlView* view) {
++  flutter_view = view;
++  overlay = gtk_overlay_new();
++  gtk_container_add(GTK_CONTAINER(overlay), GTK_WIDGET(view));
++  gtk_widget_show(overlay);
++  return overlay;
++}
++
++void foreseerr_web_register(FlEngine* engine) {
++  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
++  channel = fl_method_channel_new(fl_engine_get_binary_messenger(engine),
++                                  "foreseerr/web", FL_METHOD_CODEC(codec));
++  fl_method_channel_set_method_call_handler(channel, HandleMethod, nullptr,
++                                            nullptr);
++}
+diff --git a/linux/runner/foreseerr_web.h b/linux/runner/foreseerr_web.h
+new file mode 100644
+index 000000000..1c308f593
+--- /dev/null
++++ b/linux/runner/foreseerr_web.h
+@@ -0,0 +1,16 @@
++#ifndef RUNNER_FORESEERR_WEB_H_
++#define RUNNER_FORESEERR_WEB_H_
++
++#include <flutter_linux/flutter_linux.h>
++#include <gtk/gtk.h>
++
++// Foreseerr's web UI, shown over the Flutter view between plays.
++//
++// Wraps the Flutter view in an overlay; the web view is created on the
++// first "load" call on the foreseerr/web channel.
++GtkWidget* foreseerr_web_wrap(FlView* view);
++
++// Registers the foreseerr/web channel on the given engine.
++void foreseerr_web_register(FlEngine* engine);
++
++#endif  // RUNNER_FORESEERR_WEB_H_
+diff --git a/linux/runner/my_application.cc b/linux/runner/my_application.cc
+index 69b1831b1..205c1bca7 100644
+--- a/linux/runner/my_application.cc
++++ b/linux/runner/my_application.cc
+@@ -3,6 +3,7 @@
+ #include <flutter_linux/flutter_linux.h>
+ 
+ #include "flutter/generated_plugin_registrant.h"
++#include "foreseerr_web.h"
+ #include "native_game.h"
+ 
+ struct _MyApplication {
+@@ -305,7 +306,7 @@ static void my_application_activate(GApplication* application) {
+   GtkWindow* window =
+       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+ 
+-  gtk_window_set_title(window, "Foreseerr Player");
++  gtk_window_set_title(window, "Foreseerr");
+   my_application_install_desktop_entry();
+   my_application_set_window_icon(window);
+ 
+@@ -318,9 +319,10 @@ static void my_application_activate(GApplication* application) {
+ 
+   FlView* view = fl_view_new(project);
+   gtk_widget_show(GTK_WIDGET(view));
+-  gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
++  gtk_container_add(GTK_CONTAINER(window), foreseerr_web_wrap(view));
+ 
+   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
++  foreseerr_web_register(fl_view_get_engine(view));
+ 
+   moonfin_game_register(fl_view_get_engine(view));
+ 
+-- 
+2.56.0
+

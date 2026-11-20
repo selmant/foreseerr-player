@@ -1,6 +1,7 @@
 # Foreseerr Player
 
-Moonfin's player and on-screen controls, driven by Foreseerr. Users only ever
+The Foreseerr app: Foreseerr's own web UI, with Moonfin's player and
+on-screen controls taking the window while something plays. Users only ever
 see Foreseerr and the player: no Moonfin home, item pages or sign-in screens.
 
 This repo is a pin plus a patch series on top of
@@ -29,6 +30,23 @@ committing.
 | 0003 | Linux rebrand: `org.foreseerr.player`, `foreseerr-player://` |
 | 0004 | Show the window as soon as a play command arrives |
 | 0005 | One open link per play; shown only while playing |
+| 0006 | App mode (Linux): Foreseerr's web UI in the window between plays |
+
+### App mode (Linux)
+
+- The window shows Foreseerr, loaded from its server (asked for on first
+  run). A WebKitGTK view sits over the Flutter view in the GTK runner
+  (`linux/runner/foreseerr_web.cc`) and is hidden while the player is up.
+- Play buttons in the page hand their `foreseerr-player://open` link to the
+  player directly, with no browser prompt. Only links from the page's own
+  origin, for that same Foreseerr, are taken.
+- The page keeps its own cookies and storage under
+  `~/.local/share/org.foreseerr.player/web`, so Foreseerr stays signed in.
+- Links out of Foreseerr (TMDB, IMDb, …) open in the browser. Alt+Left/Right
+  or the mouse's side buttons go back and forward, F5 reloads, F11 toggles
+  fullscreen. `FORESEERR_WEB_DEVTOOLS=1` turns on the web inspector.
+- Playback goes fullscreen; afterwards Foreseerr comes back, windowed again
+  if it was. Closing the window quits.
 
 ### Receiver mode
 
@@ -71,13 +89,15 @@ cd ..
 ./scripts/install-linux.sh   # menu entry + foreseerr-player:// handler
 ```
 
-In Foreseerr, turn the handoff on in the browser console:
+Inside the app the handoff is always on. To hand plays over from an
+ordinary browser tab instead, turn it on in that browser's console:
 `localStorage.setItem('foreseerrPlayer.enabled', 'true')`. The browser asks
-once before opening Foreseerr Player.
+once before opening the app.
 
 ## Planned
 
-- Android: go to the background instead of hiding a window.
+- Android: app mode with an Android WebView.
+- Plex sign-in: its popup opens in the browser, so it can't finish in-app.
 - Rebrand the client name Jellyfin shows ("Moonfin for Linux") and the icon.
 
 ## License
