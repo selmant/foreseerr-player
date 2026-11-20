@@ -75,10 +75,6 @@ In Foreseerr, turn the handoff on in the browser console:
 `localStorage.setItem('foreseerrPlayer.enabled', 'true')`. The browser asks
 once before opening Foreseerr Player.
 
-Hyprland: to keep the player on a workspace of its own without pulling you
-there, add a rule such as
-`o.window("org.foreseerr.player", { workspace = "14 silent", focus_on_activate = false })`.
-
 ## Planned
 
 - Android: go to the background instead of hiding a window.
