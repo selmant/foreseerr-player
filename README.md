@@ -28,6 +28,7 @@ committing.
 | 0002 | Pairing through Foreseerr |
 | 0003 | Linux rebrand: `org.foreseerr.player`, `foreseerr-player://` |
 | 0004 | Show the window as soon as a play command arrives |
+| 0005 | One open link per play; shown only while playing |
 
 ### Receiver mode
 
@@ -39,29 +40,44 @@ committing.
   hides once no player is open. Closing the window leaves the player and
   hides it; the idle page's Quit really exits.
 
-### Pairing
+### Open links and pairing
 
-`foreseerr-player://pair?foreseerr=<url>&ticket=<ticket>[&id=<itemId>]`
+`foreseerr-player://open?foreseerr=<url>&ticket=<ticket>&id=<itemId>`
 
-Foreseerr issues the single-use ticket (`POST /api/v1/player/pair-tickets`).
-The player reads the Jellyfin server and user from `/info`, starts Quick
-Connect, and sends the code to `/quickconnect`, where Foreseerr approves it
-with the user's linked Jellyfin token. The player gets a Jellyfin device and
-session of its own; Foreseerr's token never leaves Foreseerr. Needs Quick
-Connect enabled on the Jellyfin server.
+Foreseerr sends one of these on every play, with a fresh single-use ticket
+(`POST /api/v1/player/pair-tickets`). The player reads the Jellyfin server
+and user from `/info`. Already signed in as that user, it just plays; if not,
+it starts Quick Connect and sends the code to `/quickconnect`, where Foreseerr
+approves it with the user's linked Jellyfin token. The player gets a Jellyfin
+device and session of its own; Foreseerr's token never leaves Foreseerr.
+Needs Quick Connect enabled on the Jellyfin server.
+
+A link that starts the player goes fullscreen and black until playback
+begins. A link for a running, hidden player plays without showing anything
+else. Opened by hand, the player shows its idle page.
 
 Handing the player Foreseerr's own token was tried and dropped: Jellyfin ties
 a device to a token, so the two apps overwrote each other's device, remote
 control turned off for both, and a player sign-out ended Foreseerr's link.
 
-## Build (Linux)
+## Build and install (Linux)
 
 ```sh
 ./scripts/sync.sh
 cd upstream
 flutter build linux --release --dart-define=DISTRIBUTION_CHANNEL=linux \
   --dart-define=RECEIVER_MODE=true
+cd ..
+./scripts/install-linux.sh   # menu entry + foreseerr-player:// handler
 ```
+
+In Foreseerr, turn the handoff on in the browser console:
+`localStorage.setItem('foreseerrPlayer.enabled', 'true')`. The browser asks
+once before opening Foreseerr Player.
+
+Hyprland: to keep the player on a workspace of its own without pulling you
+there, add a rule such as
+`o.window("org.foreseerr.player", { workspace = "14 silent", focus_on_activate = false })`.
 
 ## Planned
 
