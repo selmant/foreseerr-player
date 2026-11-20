@@ -31,6 +31,7 @@ committing.
 | 0004 | Show the window as soon as a play command arrives |
 | 0005 | One open link per play; shown only while playing |
 | 0006 | App mode (Linux): Foreseerr's web UI in the window between plays |
+| 0007 | Player settings as data, for Foreseerr's own settings page |
 
 ### App mode (Linux)
 
@@ -81,6 +82,24 @@ else. Opened by hand, the player shows its idle page.
 Handing the player Foreseerr's own token was tried and dropped: Jellyfin ties
 a device to a token, so the two apps overwrote each other's device, remote
 control turned off for both, and a player sign-out ended Foreseerr's link.
+
+### Player settings in Foreseerr
+
+Foreseerr shows Moonfin's player settings on its own page (Profile →
+Settings → Player, inside the app only). Nothing lists them by hand:
+
+1. The screens under Playback come from Moonfin's settings search index.
+2. Each is built off-screen for a frame, and every standard preference tile
+   on it (switch, choice, multi-select, slider) is read back: key, title,
+   description, options with their labels, current value.
+3. Foreseerr draws that schema generically and sends changes back; the app
+   applies them the way the tile would, callbacks included.
+
+So settings Moonfin adds or changes show up without work on either side.
+Custom widgets that aren't standard tiles are left out. The page talks to
+the app through `window.foreseerrPlayer.request(...)` (see
+`lib/receiver/foreseerr_web.dart`); the app waits for Moonfin's sign-in
+settings sync first, which would otherwise overwrite an early change.
 
 ## Build and install (Linux)
 

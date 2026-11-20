@@ -1,7 +1,7 @@
 From 15d6f576ab823a0453383496b9e525c4d5fdd881 Mon Sep 17 00:00:00 2001
 From: Selman Trabzon <selman.trbzon@gmail.com>
 Date: Fri, 20 Nov 2026 23:05:53 +0300
-Subject: [PATCH 3/6] chore: rebrand the linux build as foreseerr player
+Subject: [PATCH 3/7] chore: rebrand the linux build as foreseerr player
 
 Own app ID, binary name, window title, MPRIS name and
 foreseerr-player:// scheme, so the build keeps its data, keyring entry
