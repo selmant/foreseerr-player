@@ -1,12 +1,26 @@
 # Foreseerr Player
 
-The Foreseerr app: Foreseerr's own web UI, with Moonfin's player and
-on-screen controls taking the window while something plays. Users only ever
-see Foreseerr and the player: no Moonfin home, item pages or sign-in screens.
+The [Foreseerr](https://github.com/selmant/foreseerr) desktop app:
+Foreseerr's own web UI, with [Moonfin](https://github.com/Moonfin-Client/Moonfin-Core)'s
+player and on-screen controls taking the window while something plays.
+Users only ever see Foreseerr and the player: no Moonfin home, item pages
+or sign-in screens. Linux for now.
 
-Built from [Moonfin-Core](https://github.com/Moonfin-Client/Moonfin-Core)
-at a pinned release. Moonfin is not forked: our code lives in files of its
-own, and only a few lines of Moonfin's files change.
+## Built on Moonfin
+
+The player, its controls and settings, and everything that talks to
+Jellyfin during playback are [Moonfin](https://github.com/Moonfin-Client/Moonfin-Core),
+the open-source Jellyfin, Emby and Plex client by the Moonfin team. This app
+builds a pinned Moonfin release with a thin layer of its own on top. Thanks
+to the Moonfin team for making it, and for releasing it under the GPL.
+
+This app is not made, endorsed or supported by the Moonfin team. Please
+report problems with it [here](https://github.com/selmant/foreseerr-player/issues),
+not to Moonfin. If you want Moonfin itself, get it from
+[their releases](https://github.com/Moonfin-Client/Moonfin-Core#readme).
+
+Moonfin is not forked: our code lives in files of its own, and only a few
+lines of Moonfin's files change.
 
 ## Layout
 
@@ -17,6 +31,7 @@ own, and only a few lines of Moonfin's files change.
 | `patches/` | The few edits to Moonfin's own files (`git format-patch`) |
 | `upstream/` | Working checkout (ignored): the pin, the patches as commits, overlay links |
 | `dist/bundle` | The built app (ignored) |
+| `assets/foreseerr.png` | The app's icon (Foreseerr's) |
 | `scripts/sync.sh` | Check out the pin into `upstream/`, apply `patches/`, link `overlay/` |
 | `scripts/build.sh` | Build `dist/bundle` (low priority, in a build tree of its own) |
 | `scripts/update-moonfin.sh` | Move the pin to Moonfin's latest release (or a given one) if everything still applies and compiles |
@@ -155,10 +170,12 @@ libmpv from the system (Moonfin's "system libs" build). Unpack, then run
 
 - Android: the same with an Android WebView.
 - Emby and Plex sign-in through Foreseerr.
-- Rebrand the client name Jellyfin shows ("Moonfin for Linux") and the icon.
+- Name the app as itself where Jellyfin and the desktop's media controls
+  list it (they say "Moonfin" now), so problems don't reach the Moonfin team.
 
 ## License
 
-GPL-3.0-or-later. Moonfin-Core is GPL-2.0-or-later and includes GPL-3
-components, so builds are GPL-3. Foreseerr stays MIT: it only talks to the
-player over URLs and Jellyfin's API.
+GPL-3.0-or-later, like Moonfin-Core, which this builds on (copyright the
+Moonfin authors; see its repository). Foreseerr itself stays MIT: it only
+talks to the app over its play links, a page bridge and Jellyfin's API.
+`assets/foreseerr.png` is Foreseerr's icon.

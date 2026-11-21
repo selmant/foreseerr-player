@@ -37,10 +37,12 @@ mkdir -p "$dist"
 if pgrep -f "^$dist/bundle/foreseerr-player" >/dev/null; then
   rm -rf "$dist/bundle.new"
   cp -a "$built" "$dist/bundle.new"
+  cp "$root/assets/foreseerr.png" "$dist/bundle.new/"
   echo "the app is running: built into $dist/bundle.new"
   echo "after quitting it: rm -rf $dist/bundle && mv $dist/bundle.new $dist/bundle"
 else
   rm -rf "$dist/bundle" "$dist/bundle.new"
   cp -a "$built" "$dist/bundle"
+  cp "$root/assets/foreseerr.png" "$dist/bundle/"
   echo "built $dist/bundle"
 fi

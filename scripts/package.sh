@@ -12,5 +12,6 @@ trap 'rm -rf "$stage"' EXIT
 cp -a "$root/dist/bundle" "$stage/foreseerr-player"
 cp "$root/scripts/install-linux.sh" "$stage/foreseerr-player/install.sh"
 cp "$root/LICENSE" "$stage/foreseerr-player/LICENSE"
+cp "$root/assets/foreseerr.png" "$stage/foreseerr-player/foreseerr.png"
 tar -C "$stage" -czf "$root/dist/$name.tar.gz" foreseerr-player
 echo "$root/dist/$name.tar.gz"
