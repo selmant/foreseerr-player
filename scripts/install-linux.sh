@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Registers a built player with the desktop: a menu entry and the
-# foreseerr-player:// link handler browsers hand Foreseerr's play links to.
+# Adds a built app to the desktop's menu.
 #
-#   scripts/install-linux.sh [bundle-dir]   install (default: the release build)
-#   scripts/install-linux.sh --uninstall    remove the entry and the handler
+#   scripts/install-linux.sh [bundle-dir]   install (default: the app next to
+#                                           this script, else dist/bundle)
+#   scripts/install-linux.sh --uninstall    remove the entry
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 app_id=org.foreseerr.player
@@ -17,14 +17,15 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-bundle=$(cd "${1:-$root/upstream/build/linux/x64/release/bundle}" && pwd)
+here=$(cd "$(dirname "$0")" && pwd)
+default="$root/dist/bundle"
+[ -x "$here/foreseerr-player" ] && default=$here
+bundle=$(cd "${1:-$default}" && pwd)
 binary="$bundle/foreseerr-player"
 [ -x "$binary" ] || { echo "no player at $binary; build it first" >&2; exit 1; }
-# xdg-open's generic handler, which browsers use for foreseerr-player://
-# links outside GNOME and KDE, takes Exec's first word as is: no quotes, so
-# no spaces either.
+# Exec takes the path as is: no quotes, so no spaces either.
 case "$binary" in *[[:space:]]*)
-  echo "the player's path has a space; xdg-open can't run it: $binary" >&2; exit 1;;
+  echo "the app's path has a space: $binary" >&2; exit 1;;
 esac
 
 mkdir -p "$apps"
@@ -33,14 +34,11 @@ cat > "$entry" <<EOF
 Type=Application
 Name=Foreseerr
 Comment=Foreseerr, with its own player
-Exec=$binary %U
+Exec=$binary
 Icon=$bundle/data/flutter_assets/assets/icons/moonfin.png
 Categories=AudioVideo;Video;
 Terminal=false
 StartupWMClass=$app_id
-MimeType=x-scheme-handler/foreseerr-player;
 EOF
 update-desktop-database "$apps" 2>/dev/null || true
-xdg-mime default "$app_id.desktop" x-scheme-handler/foreseerr-player
 echo "installed $entry"
-echo "foreseerr-player:// opens with: $(xdg-mime query default x-scheme-handler/foreseerr-player)"

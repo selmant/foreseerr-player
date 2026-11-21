@@ -1,0 +1,35 @@
+# Push a v<version> tag to release that commit.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ github.ref_name }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
+        with:
+          name: linux-x64
+          path: dist
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          moonfin=$(cat moonfin.version)
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz \
+            --title "$GITHUB_REF_NAME" --generate-notes \
+            --notes "Built on Moonfin $moonfin. Linux x64; needs WebKitGTK 4.1 and libmpv from your system. Unpack, run ./install.sh for a menu entry, or start ./foreseerr-player."

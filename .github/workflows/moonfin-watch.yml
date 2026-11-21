@@ -1,0 +1,102 @@
+# Daily: when Moonfin has released a version newer than moonfin.version,
+# tries scripts/update-moonfin.sh on it and opens an issue either way. If
+# the patches apply and our code compiles, a PR moving the pin comes with it
+# (CI builds that branch); if not, the issue says what broke.
+#
+# GitHub turns schedules off after 60 days without commits; run it by hand
+# (Actions → Moonfin watch → Run workflow) to switch it back on.
+name: Moonfin watch
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency: moonfin-watch
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Git identity
+        run: |
+          git config --global user.name 'foreseerr-player ci'
+          git config --global user.email 'ci@users.noreply.github.com'
+
+      - name: Newest Moonfin release
+        id: release
+        run: |
+          ./scripts/sync.sh >/dev/null
+          current=$(cat moonfin.version)
+          latest=$(./scripts/latest-moonfin-release.sh --fetch)
+          echo "current=$current latest=$latest"
+          newest=$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)
+          title="Moonfin $latest released"
+          if [ "$latest" = "$current" ] || [ "$newest" != "$latest" ]; then
+            echo "up to date"
+          elif [ -n "$(gh issue list --state all --search "\"$title\" in:title" --json number --jq '.[].number')" ]; then
+            echo "already reported: $title"
+          else
+            flutter=$(git -C upstream show "$latest:.github/workflows/build.yml" |
+              sed -n "s/^  FLUTTER_VERSION: '\(.*\)'.*/\1/p")
+            {
+              echo "version=$latest"
+              echo "title=$title"
+              echo "flutter=$flutter"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: subosito/flutter-action@v2
+        if: steps.release.outputs.version
+        with:
+          flutter-version: ${{ steps.release.outputs.flutter }}
+
+      - name: Try the update
+        id: update
+        if: steps.release.outputs.version
+        run: |
+          set +e
+          ./scripts/update-moonfin.sh "${{ steps.release.outputs.version }}" > update.log 2>&1
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          cat update.log
+
+      - name: PR when it works
+        id: pr
+        if: steps.update.outputs.status == '0'
+        run: |
+          version=${{ steps.release.outputs.version }}
+          branch="moonfin-$version"
+          ./scripts/export-patches.sh >/dev/null
+          git switch -c "$branch"
+          git add moonfin.rev moonfin.version patches
+          git commit -m "chore: move to moonfin $version"
+          git push -f origin "$branch"
+          url=$(gh pr create --head "$branch" --title "chore: move to Moonfin $version" \
+            --body "Moonfin $version: the patches apply and our code compiles. CI builds this branch; check playback before merging.")
+          # A PR opened with the workflow token starts no workflows itself.
+          gh workflow run ci.yml --ref "$branch"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Issue
+        if: steps.release.outputs.version
+        run: |
+          version=${{ steps.release.outputs.version }}
+          notes="https://github.com/Moonfin-Client/Moonfin-Core/releases/tag/$version"
+          if [ "${{ steps.update.outputs.status }}" = "0" ]; then
+            body="Moonfin $version is out ($notes). The update works: ${{ steps.pr.outputs.url }}"
+          else
+            # shellcheck disable=SC2016 # backticks are Markdown
+            body=$(printf 'Moonfin %s is out (%s). The update needs work: a patch no longer applies or our code no longer compiles against it.\n\n```\n%s\n```\n\nFix it locally: `scripts/update-moonfin.sh %s`, then fix the patch in upstream/ and export, or adapt overlay/.' \
+              "$version" "$notes" "$(tail -60 update.log)" "$version")
+          fi
+          gh issue create --title "${{ steps.release.outputs.title }}" --body "$body"

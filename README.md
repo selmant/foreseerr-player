@@ -4,45 +4,70 @@ The Foreseerr app: Foreseerr's own web UI, with Moonfin's player and
 on-screen controls taking the window while something plays. Users only ever
 see Foreseerr and the player: no Moonfin home, item pages or sign-in screens.
 
-This repo is a pin plus a patch series on top of
-[Moonfin-Core](https://github.com/Moonfin-Client/Moonfin-Core). Moonfin itself
-is not modified or forked on GitHub.
+Built from [Moonfin-Core](https://github.com/Moonfin-Client/Moonfin-Core)
+at a pinned release. Moonfin is not forked: our code lives in files of its
+own, and only a few lines of Moonfin's files change.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `moonfin.rev` | Pinned Moonfin-Core commit |
-| `patches/` | `git format-patch` series applied on the pin |
-| `upstream/` | Working checkout (ignored) |
-| `scripts/sync.sh` | Check out the pin into `upstream/` and apply `patches/` |
+| `moonfin.version`, `moonfin.rev` | Pinned Moonfin release, and its commit |
+| `overlay/` | Our files, linked into the Moonfin checkout at the same paths |
+| `patches/` | The few edits to Moonfin's own files (`git format-patch`) |
+| `upstream/` | Working checkout (ignored): the pin, the patches as commits, overlay links |
+| `dist/bundle` | The built app (ignored) |
+| `scripts/sync.sh` | Check out the pin into `upstream/`, apply `patches/`, link `overlay/` |
+| `scripts/build.sh` | Build `dist/bundle` (low priority, in a build tree of its own) |
+| `scripts/update-moonfin.sh` | Move the pin to Moonfin's latest release (or a given one) if everything still applies and compiles |
+| `scripts/latest-moonfin-release.sh` | Moonfin's newest release tag |
+| `scripts/package.sh` | Pack `dist/bundle` as a release tarball |
 | `scripts/export-patches.sh` | Write `upstream/`'s `foreseerr-player` commits back to `patches/` |
+| `scripts/link-overlay.sh` | Link `overlay/` into a checkout (sync and build do this) |
+| `scripts/install-linux.sh` | Add `dist/bundle` to the desktop's menu |
 
-Work happens in `upstream/` on the `foreseerr-player` branch; export after
-committing.
+Edit overlay files anywhere (the links in `upstream/` point at them). Edits
+to Moonfin's own files are commits on `upstream/`'s `foreseerr-player`
+branch, exported with `export-patches.sh`; keep them few and small.
 
-## Patches
+### What touches Moonfin
+
+`patches/`, all in files Moonfin rarely changes, except the one line:
 
 | Patch | What |
 | --- | --- |
-| 0001 | Receiver mode, built in with `--dart-define=RECEIVER_MODE=true` |
-| 0002 | Pairing through Foreseerr |
-| 0003 | Linux rebrand: `org.foreseerr.player`, `foreseerr-player://` |
-| 0004 | Show the window as soon as a play command arrives |
-| 0005 | One open link per play; shown only while playing |
-| 0006 | App mode (Linux): Foreseerr's web UI in the window between plays |
-| 0007 | Player settings as data, for Foreseerr's own settings page |
+| 0001 | Linux runner: `foreseerr-player` / `org.foreseerr.player`, WebKitGTK, `foreseerr_web.cc`, one call in `main.cc` |
+| 0002 | One `part` line in `settings_side_panel.dart`, so the overlay can read the settings search index |
 
-### App mode (Linux)
+Everything else uses Moonfin's public code, and a rename there fails the
+build (or `update-moonfin.sh`) with a clear error rather than a conflict:
 
-- The window shows Foreseerr, loaded from its server (asked for on first
-  run). A WebKitGTK view sits over the Flutter view in the GTK runner
-  (`linux/runner/foreseerr_web.cc`) and is hidden while the player is up.
-- Play buttons in the page hand their `foreseerr-player://open` link to the
-  player directly, with no browser prompt. Only links from the page's own
-  origin, for that same Foreseerr, are taken.
-- The page keeps its own cookies and storage under
-  `~/.local/share/org.foreseerr.player/web`, so Foreseerr stays signed in.
+- `main()` from `lib/main.dart`, which our entry point calls first.
+- `appRouter`, `PlayerRouteObserver`, `Destinations`: opening the player
+  and knowing when one is up.
+- `PlaybackManager.playItems`, `SessionRepository`, the client factory and
+  the sign-in store: playing and signing in.
+- `SetupWizardGate.deferThisLaunch`: no first-run wizard.
+- The settings tiles (`preference_tiles.dart`): reading the player settings.
+
+## How it works (Linux)
+
+- `lib/foreseerr/main.dart` is the entry point (`flutter build linux -t
+  lib/foreseerr/main.dart`). It runs Moonfin's `main()` unchanged, then
+  starts ours.
+- `foreseerr_web_install()` (`linux/runner/foreseerr_web.cc`) takes over
+  GtkWindow's `add` for the application window: Moonfin's Flutter view goes
+  into an overlay with a black curtain and the web view over it. The
+  `foreseerr/web` channel lets Dart load pages and pick what shows: `web`,
+  `blank` (black) or `player` (Flutter).
+- The web view shows Foreseerr, loaded from its server, or the app's own
+  setup and load-error pages (`pages.dart`) before that. It keeps its
+  cookies and storage under `~/.local/share/org.foreseerr.player/web`.
+- Moonfin's screens never show: Flutter is only uncovered while a player
+  route is open. Behind the page, Moonfin waits on its static web
+  diagnostics page (`/_diag`) instead of Home, so Home's trailers don't run
+  (`player.dart`). A path with no route would be quieter, but go_router
+  can't push the player over it.
 - Links out of Foreseerr (TMDB, IMDb, …) open in the browser. Alt+Left/Right
   or the mouse's side buttons go back and forward, F5 reloads, F11 toggles
   fullscreen. `FORESEERR_WEB_DEVTOOLS=1` turns on the web inspector.
@@ -56,38 +81,24 @@ committing.
   show a layer before it is painted.
 - Playback stays in the window as it is: fullscreen only if the app already
   was. Made fullscreen from the player, the window goes back to windowed for
-  Foreseerr afterwards, and the next start opens windowed too. Closing the
-  window quits.
+  Foreseerr afterwards, also when the app was quit during the play.
+- Casting to the player from Jellyfin works while the app is open (Moonfin's
+  own remote control).
 
-### Receiver mode
-
-- A Jellyfin remote `PlayNow`, or a `foreseerr-player://play?id=…[&userId=…]`
-  `[&startTicks=…]` link, opens the player straight away. Play links resume
-  from the user's saved position when `startTicks` is absent.
-- Every route other than the players goes to a small idle page.
-- Desktop: the window comes up fullscreen when a play command arrives and
-  hides once no player is open. Closing the window leaves the player and
-  hides it; the idle page's Quit really exits.
-
-### Open links and pairing
+### Playing and signing in
 
 `foreseerr-player://open?foreseerr=<url>&ticket=<ticket>&id=<itemId>`
 
-Foreseerr sends one of these on every play, with a fresh single-use ticket
-(`POST /api/v1/player/pair-tickets`). The player reads the Jellyfin server
-and user from `/info`. Already signed in as that user, it just plays; if not,
-it starts Quick Connect and sends the code to `/quickconnect`, where Foreseerr
-approves it with the user's linked Jellyfin token. The player gets a Jellyfin
-device and session of its own; Foreseerr's token never leaves Foreseerr.
-Needs Quick Connect enabled on the Jellyfin server.
+Foreseerr's play buttons navigate to one of these, with a fresh single-use
+ticket (`POST /api/v1/player/pair-tickets`); the web view hands it to the
+app instead of loading it, and only from Foreseerr's own page. The app reads
+the Jellyfin server and user from `/info`. Already signed in as that user,
+it just plays; if not, it redeems the ticket (`/redeem`) for the Jellyfin
+session Foreseerr holds for the user and signs in with it. Progress and
+errors show as a small notice on Foreseerr's page.
 
-A link that starts the player goes fullscreen and black until playback
-begins. A link for a running, hidden player plays without showing anything
-else. Opened by hand, the player shows its idle page.
-
-Handing the player Foreseerr's own token was tried and dropped: Jellyfin ties
-a device to a token, so the two apps overwrote each other's device, remote
-control turned off for both, and a player sign-out ended Foreseerr's link.
+Launched with such a link as its argument, the app plays it once
+Foreseerr is up.
 
 ### Player settings in Foreseerr
 
@@ -104,29 +115,46 @@ Settings → Player, inside the app only). Nothing lists them by hand:
 So settings Moonfin adds or changes show up without work on either side.
 Custom widgets that aren't standard tiles are left out. The page talks to
 the app through `window.foreseerrPlayer.request(...)` (see
-`lib/receiver/foreseerr_web.dart`); the app waits for Moonfin's sign-in
+`overlay/lib/foreseerr/shell.dart`); the app waits for Moonfin's sign-in
 settings sync first, which would otherwise overwrite an early change.
 
 ## Build and install (Linux)
 
 ```sh
 ./scripts/sync.sh
-cd upstream
-flutter build linux --release --dart-define=DISTRIBUTION_CHANNEL=linux \
-  --dart-define=RECEIVER_MODE=true
-cd ..
-./scripts/install-linux.sh   # menu entry + foreseerr-player:// handler
+FLUTTER=/path/to/flutter ./scripts/build.sh
+./scripts/install-linux.sh   # menu entry
 ```
 
-Inside the app the handoff is always on. To hand plays over from an
-ordinary browser tab instead, turn it on in that browser's console:
-`localStorage.setItem('foreseerrPlayer.enabled', 'true')`. The browser asks
-once before opening the app.
+## Updating Moonfin
+
+The pin follows Moonfin's releases. Every day, the Moonfin watch workflow
+looks for a newer one and opens an issue about it. If the update works (the
+patches apply and our code compiles), the issue links a PR that moves the
+pin, and CI builds it; check playback, then merge. If not, the issue has the
+log. By hand:
+
+```sh
+FLUTTER=/path/to/flutter ./scripts/update-moonfin.sh   # or a tag
+```
+
+It tries the patches on the new release and compiles the overlay against it
+in a temporary checkout, and only then moves the pin. When a patch no longer
+applies, fix it on the new release in `upstream/` and export; when the
+overlay no longer compiles, adapt it to Moonfin's rename.
+
+## Releases
+
+Push a `v<version>` tag: the Release workflow builds the Linux app with the
+Flutter version Moonfin's own CI uses and attaches
+`foreseerr-player-<version>-linux-x64.tar.gz`. It needs WebKitGTK 4.1 and
+libmpv from the system (Moonfin's "system libs" build). Unpack, then run
+`./install.sh` for a menu entry or start `./foreseerr-player`.
 
 ## Planned
 
-- Android: app mode with an Android WebView.
-- Plex sign-in: its popup opens in the browser, so it can't finish in-app.
+- Android: the same with an Android WebView.
+- Emby and Plex sign-in through Foreseerr.
 - Rebrand the client name Jellyfin shows ("Moonfin for Linux") and the icon.
 
 ## License

@@ -1,0 +1,25 @@
+From 4db472c96de09400ed7a247cf915428d1973cd39 Mon Sep 17 00:00:00 2001
+From: Selman Trabzon <selman.trbzon@gmail.com>
+Date: Sat, 21 Nov 2026 16:59:24 +0300
+Subject: [PATCH 2/2] feat: let foreseerr read the settings search index
+
+The overlay's part file lists the screens under a settings category.
+---
+ lib/ui/screens/settings/settings_side_panel.dart | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/lib/ui/screens/settings/settings_side_panel.dart b/lib/ui/screens/settings/settings_side_panel.dart
+index 91c52234a..527fb066d 100644
+--- a/lib/ui/screens/settings/settings_side_panel.dart
++++ b/lib/ui/screens/settings/settings_side_panel.dart
+@@ -157,6 +157,7 @@ part 'panel/automation_queue_screen.dart';
+ part 'panel/advanced_options_screen.dart';
+ part 'panel/syncplay_settings_screen.dart';
+ part 'panel/settings_panel_tiles.dart';
++part 'panel/foreseerr_settings_screens.dart';
+ 
+ /// The Navigation Bar screen on its own, which the panel otherwise only opens
+ /// from inside its private navigator.
+-- 
+2.56.0
+
