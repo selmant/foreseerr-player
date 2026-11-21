@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:moonfin/util/app_exit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'pages.dart';
@@ -170,6 +171,11 @@ class ForeseerrShell {
   /// - `{"type": "pair", "ticket"}`: signs the player in as the ticket's
   ///   user, as a play would, when settings answered `not_paired`; answers
   ///   whether it worked.
+  /// - `{"type": "quit"}`: quits the app, right after answering.
+  /// - `{"type": "clearCache"}`: clears the web view's HTTP cache (not its
+  ///   cookies or storage).
+  /// - `{"type": "changeAddress"}`: shows the setup page, right after
+  ///   answering, to open another Foreseerr.
   ///
   /// Always a JSON `{"result": …}` or `{"error": "…"}`.
   Future<String> _answer(String message) async {
@@ -183,6 +189,11 @@ class ForeseerrShell {
           request['value'],
         ),
         'pair' => await _pair(request['ticket'] as String),
+        'quit' => _afterAnswer(AppExit.closeApp),
+        'clearCache' => await _clearCache(),
+        'changeAddress' => _afterAnswer(
+          () => _onPageAction(Uri(path: 'change')),
+        ),
         final type => throw ArgumentError('unknown request $type'),
       };
       return jsonEncode({'result': result});
@@ -195,6 +206,17 @@ class ForeseerrShell {
       };
       return jsonEncode({'error': text});
     }
+  }
+
+  /// Runs [action] once the answer is on its way: it takes the page away.
+  static bool _afterAnswer(Future<void> Function() action) {
+    Timer(const Duration(milliseconds: 100), () => unawaited(action()));
+    return true;
+  }
+
+  Future<bool> _clearCache() async {
+    await _channel.invokeMethod<void>('clearCache');
+    return true;
   }
 
   Future<bool> _pair(String ticket) async {

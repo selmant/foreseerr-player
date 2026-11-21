@@ -391,6 +391,31 @@ const gchar* StringArg(FlValue* args, const gchar* key) {
              : nullptr;
 }
 
+void OnCacheCleared(GObject* manager, GAsyncResult* result, gpointer data) {
+  g_autoptr(FlMethodCall) call = FL_METHOD_CALL(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(FlMethodResponse) response = nullptr;
+  if (webkit_website_data_manager_clear_finish(
+          WEBKIT_WEBSITE_DATA_MANAGER(manager), result, &error)) {
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "clear_failed", error->message, nullptr));
+  }
+  fl_method_call_respond(call, response, nullptr);
+}
+
+// The web view's HTTP caches; cookies and storage stay.
+void ClearCache(FlMethodCall* call) {
+  WebKitWebsiteDataManager* manager = webkit_web_context_get_website_data_manager(
+      webkit_web_view_get_context(web));
+  webkit_website_data_manager_clear(
+      manager,
+      static_cast<WebKitWebsiteDataTypes>(WEBKIT_WEBSITE_DATA_MEMORY_CACHE |
+                                          WEBKIT_WEBSITE_DATA_DISK_CACHE),
+      0, nullptr, OnCacheCleared, g_object_ref(call));
+}
+
 void HandleMethod(FlMethodChannel*, FlMethodCall* call, gpointer) {
   const gchar* method = fl_method_call_get_name(call);
   FlValue* args = fl_method_call_get_args(call);
@@ -413,6 +438,9 @@ void HandleMethod(FlMethodChannel*, FlMethodCall* call, gpointer) {
       webkit_web_view_evaluate_javascript(web, argument, -1, nullptr, nullptr,
                                           nullptr, nullptr, nullptr);
     }
+  } else if (g_str_equal(method, "clearCache") && web != nullptr) {
+    ClearCache(call);
+    return;
   } else if (g_str_equal(method, "reload")) {
     if (web != nullptr) webkit_web_view_reload(web);
   } else {
