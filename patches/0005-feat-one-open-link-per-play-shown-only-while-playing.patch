@@ -1,7 +1,7 @@
 From 11cd0f95f138d57cc47a8844c2b8af16d2ca49aa Mon Sep 17 00:00:00 2001
 From: Selman Trabzon <selman.trbzon@gmail.com>
 Date: Fri, 20 Nov 2026 23:50:27 +0300
-Subject: [PATCH 5/7] feat: one open link per play, shown only while playing
+Subject: [PATCH 5/8] feat: one open link per play, shown only while playing
 
 Foreseerr sends <scheme>://open?foreseerr=&ticket=&id= with a fresh
 ticket on every play. The player switches to the ticket's user when it

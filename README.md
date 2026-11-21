@@ -46,8 +46,14 @@ committing.
 - Links out of Foreseerr (TMDB, IMDb, …) open in the browser. Alt+Left/Right
   or the mouse's side buttons go back and forward, F5 reloads, F11 toggles
   fullscreen. `FORESEERR_WEB_DEVTOOLS=1` turns on the web inspector.
-- On NVIDIA the page uses WebKit's shared-memory renderer: the DMA-BUF one
-  spins and eats memory there (WebKitGTK 2.54, Wayland).
+- The page draws on the GPU with WebKit's previous compositor
+  (`WEBKIT_USE_SKIA_FOR_COMPOSITION=0`): 2.54's Skia one flashes old frames
+  during fades and, on CSS backdrop-filter, grows without end (fixed in
+  2.54.2). On NVIDIA under Wayland the app also sets
+  `__NV_DISABLE_EXPLICIT_SYNC=1` (otherwise Wayland error 71). The usual
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1` works but draws on the CPU, about 4 fps
+  on a 4K screen. Foreseerr marks its animated elements so WebKit doesn't
+  show a layer before it is painted.
 - Playback stays in the window as it is: fullscreen only if the app already
   was. Made fullscreen from the player, the window goes back to windowed for
   Foreseerr afterwards, and the next start opens windowed too. Closing the
