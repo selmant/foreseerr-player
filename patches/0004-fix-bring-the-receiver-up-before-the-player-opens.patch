@@ -1,7 +1,7 @@
 From cdbc81905ed25d2b2909cdf26a0299a89a3dbf3a Mon Sep 17 00:00:00 2001
 From: Selman Trabzon <selman.trbzon@gmail.com>
 Date: Fri, 20 Nov 2026 23:25:24 +0300
-Subject: [PATCH 4/8] fix: bring the receiver up before the player opens
+Subject: [PATCH 4/9] fix: bring the receiver up before the player opens
 
 A hidden window draws no frames, so the player route, and with it the
 show that hung off it, never landed: a second remote play played with no

@@ -1,7 +1,7 @@
 From ab323546f64547b92fad706ef762632dc7e4289b Mon Sep 17 00:00:00 2001
 From: Selman Trabzon <selman.trbzon@gmail.com>
 Date: Sat, 21 Nov 2026 00:28:45 +0300
-Subject: [PATCH 6/8] feat: app mode, foreseerr's web ui in the window between
+Subject: [PATCH 6/9] feat: app mode, foreseerr's web ui in the window between
  plays
 
 On Linux the receiver build is now the Foreseerr app: a WebKitGTK view over
