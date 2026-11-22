@@ -171,6 +171,10 @@ Flutter version Moonfin's own CI uses and attaches
 libmpv from the system (Moonfin's "system libs" build). Unpack, then run
 `./install.sh` for a menu entry or start `./foreseerr-player`.
 
+Each Foreseerr release also carries the app, built from this repository's
+`main` at that time, as `foreseerr-desktop-linux-x64.tar.gz` (Foreseerr's
+`desktop-app.yml` calls `build.yml` here).
+
 ## Planned
 
 - Android: the same with an Android WebView.

@@ -1,5 +1,6 @@
-# Builds the Linux app at the checked-out commit and uploads the tarball.
-# Called by ci.yml and release.yml.
+# Builds the Linux app and uploads the tarball as the `linux-x64` artifact.
+# Called by ci.yml and release.yml, and by Foreseerr's release, which
+# attaches the app to each Foreseerr release.
 name: Build
 
 on:
@@ -7,6 +8,10 @@ on:
     inputs:
       version:
         description: "Version in the tarball's name (default: git describe)"
+        type: string
+        default: ''
+      ref:
+        description: "Commit, branch or tag of this repository to build (default: the caller's, or main when called from elsewhere)"
         type: string
         default: ''
 
@@ -17,8 +22,12 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
+      # Called from another repository, the default checkout would be that
+      # repository: this one is named explicitly.
       - uses: actions/checkout@v5
         with:
+          repository: selmant/foreseerr-player
+          ref: ${{ inputs.ref || (github.repository == 'selmant/foreseerr-player' && github.sha) || 'main' }}
           fetch-depth: 0
 
       - name: Git identity (git am needs one)
