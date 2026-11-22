@@ -1,9 +1,13 @@
 #include "foreseerr_web.h"
 
+#include <fcntl.h>
 #include <flutter_linux/flutter_linux.h>
 #include <gdk/gdkkeysyms.h>
 #include <gtk/gtk.h>
+#include <unistd.h>
 #include <webkit2/webkit2.h>
+
+#include <cstdio>
 
 // The WebKitGTK 4.1 API this uses (website data manager, persistent cookie
 // storage) is deprecated in newer releases, but still the only way there.
@@ -610,9 +614,38 @@ void OnStartup(GApplication*, gpointer) {
                                   G_CALLBACK(OnWindowAdd));
 }
 
+// Started from the desktop's menu, the app's output (ours, Moonfin's, GTK's
+// and WebKit's) would go nowhere. Unless it runs in a terminal, it goes to
+// a log of this run instead, with the run before kept next to it, so the
+// log of a crash survives starting the app again:
+// ~/.local/state/org.foreseerr.player/foreseerr-player{,.previous}.log
+void LogToFile() {
+  if (isatty(STDERR_FILENO)) return;
+  g_autofree gchar* dir =
+      g_build_filename(g_get_user_state_dir(), APPLICATION_ID, nullptr);
+  g_mkdir_with_parents(dir, 0700);
+  g_autofree gchar* log = g_build_filename(dir, "foreseerr-player.log", nullptr);
+  g_autofree gchar* previous =
+      g_build_filename(dir, "foreseerr-player.previous.log", nullptr);
+  rename(log, previous);
+  int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) return;
+  fflush(stdout);
+  fflush(stderr);
+  dup2(fd, STDOUT_FILENO);
+  dup2(fd, STDERR_FILENO);
+  close(fd);
+  // Line by line, so a crash loses nothing that was printed.
+  setvbuf(stdout, nullptr, _IOLBF, 0);
+  g_autoptr(GDateTime) now = g_date_time_new_now_local();
+  g_autofree gchar* when = g_date_time_format_iso8601(now);
+  printf("[Foreseerr] started %s, pid %d\n", when, getpid());
+}
+
 }  // namespace
 
 void foreseerr_web_install(GApplication* application) {
+  LogToFile();
   // WebKitGTK 2.54's Skia compositor flashes old frames during fades and
   // repaints without end on CSS backdrop-filter; the previous one draws on
   // the GPU without either.

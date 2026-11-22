@@ -86,7 +86,11 @@ build (or `update-moonfin.sh`) with a clear error rather than a conflict:
 - Links out of Foreseerr (TMDB, IMDb, …) open in the browser. Alt+Left/Right
   or the mouse's side buttons go back and forward, F5 reloads, F11 toggles
   fullscreen. Ctrl with +, - and 0, or with the mouse wheel, zooms the page
-  (kept across runs, in `~/.local/share/org.foreseerr.player/web-zoom`). `FORESEERR_WEB_DEVTOOLS=1` turns on the web inspector.
+  (kept across runs, in `~/.local/share/org.foreseerr.player/web-zoom`).
+- Not started from a terminal, the app writes its output to
+  `~/.local/state/org.foreseerr.player/foreseerr-player.log`, one log per
+  run; the run before is kept as `foreseerr-player.previous.log`, so the
+  log of a crash survives starting the app again. `FORESEERR_WEB_DEVTOOLS=1` turns on the web inspector.
 - The page draws on the GPU with WebKit's previous compositor
   (`WEBKIT_USE_SKIA_FOR_COMPOSITION=0`): 2.54's Skia one flashes old frames
   during fades and, on CSS backdrop-filter, grows without end (fixed in
