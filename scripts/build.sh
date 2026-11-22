@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Linux app from upstream/'s foreseerr-player branch (commits
 # only) plus overlay/, in a build tree of its own, at low priority, into
-# dist/bundle. A running app keeps its bundle (Flutter reads its assets
-# from it while it runs): the new one goes to dist/bundle.new instead.
+# dist/bundle, also while the app runs (see the swap at the end).
 #
 #   FLUTTER=/path/to/flutter scripts/build.sh
 set -euo pipefail
@@ -34,15 +33,12 @@ fi
 built="$tree/build/linux/x64/release/bundle"
 dist="$root/dist"
 mkdir -p "$dist"
-if pgrep -f "^$dist/bundle/foreseerr-player" >/dev/null; then
-  rm -rf "$dist/bundle.new"
-  cp -a "$built" "$dist/bundle.new"
-  cp "$root/assets/foreseerr.png" "$dist/bundle.new/"
-  echo "the app is running: built into $dist/bundle.new"
-  echo "after quitting it: rm -rf $dist/bundle && mv $dist/bundle.new $dist/bundle"
-else
-  rm -rf "$dist/bundle" "$dist/bundle.new"
-  cp -a "$built" "$dist/bundle"
-  cp "$root/assets/foreseerr.png" "$dist/bundle/"
-  echo "built $dist/bundle"
-fi
+# Copied next to it, then swapped in by renames: a running app keeps the
+# files it has open and gets the new build when it next starts.
+rm -rf "$dist/.bundle.next" "$dist/.bundle.gone"
+cp -a "$built" "$dist/.bundle.next"
+cp "$root/assets/foreseerr.png" "$dist/.bundle.next/"
+[ -e "$dist/bundle" ] && mv "$dist/bundle" "$dist/.bundle.gone"
+mv "$dist/.bundle.next" "$dist/bundle"
+rm -rf "$dist/.bundle.gone"
+echo "built $dist/bundle"
