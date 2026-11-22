@@ -226,8 +226,129 @@ void ToggleFullscreen() {
   }
 }
 
+// Page zoom, as in a browser, kept across runs.
+constexpr double kZoomSteps[] = {0.5, 0.67, 0.75, 0.8,  0.9, 1.0, 1.1,
+                                 1.25, 1.5, 1.75, 2.0, 2.5, 3.0};
+// Smooth (touchpad) scrolling with Ctrl, not yet a whole step.
+double scroll_zoom = 0;
+
+gchar* ZoomFile() {
+  return g_build_filename(g_get_user_data_dir(), APPLICATION_ID, "web-zoom",
+                          nullptr);
+}
+
+double SavedZoom() {
+  g_autofree gchar* file = ZoomFile();
+  g_autofree gchar* text = nullptr;
+  if (!g_file_get_contents(file, &text, nullptr, nullptr)) return 1.0;
+  double level = g_ascii_strtod(text, nullptr);
+  double low = kZoomSteps[0];
+  double high = kZoomSteps[G_N_ELEMENTS(kZoomSteps) - 1];
+  return level >= low && level <= high ? level : 1.0;
+}
+
+// Shows the new zoom for a moment at the top of the page.
+void ShowZoom(double level) {
+  g_autofree gchar* script = g_strdup_printf(
+      R"js((() => {
+  const id = 'foreseerr-player-zoom';
+  let badge = document.getElementById(id);
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.id = id;
+    badge.setAttribute('role', 'status');
+    Object.assign(badge.style, {
+      position: 'fixed', top: '16px', left: '50%%', zIndex: '2147483647',
+      transform: 'translateX(-50%%)', padding: '6px 14px',
+      borderRadius: '8px', background: 'rgba(17, 24, 39, 0.95)',
+      color: '#f3f4f6', border: '1px solid #4b5563',
+      boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)',
+      font: '14px/1.4 system-ui, sans-serif', pointerEvents: 'none',
+    });
+    document.body.append(badge);
+  }
+  badge.textContent = '%d%%';
+  clearTimeout(badge.foreseerrTimer);
+  badge.foreseerrTimer = setTimeout(() => badge.remove(), 1200);
+})();)js",
+      static_cast<int>(level * 100 + 0.5));
+  webkit_web_view_evaluate_javascript(web, script, -1, nullptr, nullptr,
+                                      nullptr, nullptr, nullptr);
+}
+
+void SetZoom(double level) {
+  if (level == webkit_web_view_get_zoom_level(web)) return;
+  webkit_web_view_set_zoom_level(web, level);
+  g_autofree gchar* file = ZoomFile();
+  gchar text[G_ASCII_DTOSTR_BUF_SIZE];
+  g_ascii_dtostr(text, sizeof text, level);
+  g_file_set_contents(file, text, -1, nullptr);
+  ShowZoom(level);
+}
+
+// One step in or out (+1 or -1) from the current zoom.
+void StepZoom(int direction) {
+  double current = webkit_web_view_get_zoom_level(web);
+  int count = G_N_ELEMENTS(kZoomSteps);
+  for (int i = 0; i < count; i++) {
+    double step = kZoomSteps[direction > 0 ? i : count - 1 - i];
+    if (direction > 0 ? step > current + 0.001 : step < current - 0.001) {
+      SetZoom(step);
+      return;
+    }
+  }
+}
+
+gboolean OnScroll(GtkWidget*, GdkEventScroll* event, gpointer) {
+  guint mods = event->state & gtk_accelerator_get_default_mod_mask();
+  if (mods != GDK_CONTROL_MASK) {
+    scroll_zoom = 0;
+    return FALSE;
+  }
+  switch (event->direction) {
+    case GDK_SCROLL_UP:
+      StepZoom(1);
+      break;
+    case GDK_SCROLL_DOWN:
+      StepZoom(-1);
+      break;
+    case GDK_SCROLL_SMOOTH:
+      scroll_zoom += event->delta_y;
+      for (; scroll_zoom <= -1; scroll_zoom += 1) StepZoom(1);
+      for (; scroll_zoom >= 1; scroll_zoom -= 1) StepZoom(-1);
+      break;
+    default:
+      break;
+  }
+  return TRUE;
+}
+
+// Ctrl with +, - or 0 (Shift allowed: "+" needs it on many layouts).
+bool OnZoomKey(guint mods, guint key) {
+  if ((mods & ~GDK_SHIFT_MASK) != GDK_CONTROL_MASK) return false;
+  switch (key) {
+    case GDK_KEY_plus:
+    case GDK_KEY_equal:
+    case GDK_KEY_KP_Add:
+      StepZoom(1);
+      return true;
+    case GDK_KEY_minus:
+    case GDK_KEY_underscore:
+    case GDK_KEY_KP_Subtract:
+      StepZoom(-1);
+      return true;
+    case GDK_KEY_0:
+    case GDK_KEY_KP_0:
+      SetZoom(1.0);
+      return true;
+    default:
+      return false;
+  }
+}
+
 gboolean OnKeyPress(GtkWidget*, GdkEventKey* event, gpointer) {
   guint mods = event->state & gtk_accelerator_get_default_mod_mask();
+  if (OnZoomKey(mods, event->keyval)) return TRUE;
   if (mods == GDK_MOD1_MASK && event->keyval == GDK_KEY_Left) {
     webkit_web_view_go_back(web);
     return TRUE;
@@ -332,6 +453,7 @@ void EnsureWebView() {
       settings, g_getenv("FORESEERR_WEB_DEVTOOLS") != nullptr);
   GdkRGBA background = {0.067, 0.094, 0.153, 1.0};  // Foreseerr's gray-900
   webkit_web_view_set_background_color(web, &background);
+  webkit_web_view_set_zoom_level(web, SavedZoom());
 
   g_signal_connect(web, "decide-policy", G_CALLBACK(OnDecidePolicy), nullptr);
   g_signal_connect(web, "load-failed", G_CALLBACK(OnLoadFailed), nullptr);
@@ -340,6 +462,7 @@ void EnsureWebView() {
   g_signal_connect(web, "key-press-event", G_CALLBACK(OnKeyPress), nullptr);
   g_signal_connect(web, "button-press-event", G_CALLBACK(OnButtonPress),
                    nullptr);
+  g_signal_connect(web, "scroll-event", G_CALLBACK(OnScroll), nullptr);
 
   gtk_overlay_add_overlay(GTK_OVERLAY(overlay), GTK_WIDGET(web));
   ApplyMode();
