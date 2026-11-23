@@ -4,6 +4,7 @@
 #include <flutter_linux/flutter_linux.h>
 #include <gdk/gdkkeysyms.h>
 #include <gtk/gtk.h>
+#include <malloc.h>
 #include <unistd.h>
 #include <webkit2/webkit2.h>
 
@@ -392,6 +393,22 @@ gboolean OnCurtainDraw(GtkWidget*, cairo_t* cr, gpointer) {
   return TRUE;
 }
 
+// A 4K play leaves about a gigabyte of freed memory in glibc's malloc arenas
+// (mpv's demuxer cache and decoder buffers), which glibc keeps for reuse
+// instead of returning it, so the app stayed that much bigger after every
+// play. Back in Foreseerr, once Moonfin has disposed of the player, it goes
+// back to the system. (libmpv older than 0.42 also leaks a GL fence per frame
+// and keeps the stopped file's packets; only a newer mpv fixes those.)
+guint trim_source = 0;
+
+gboolean TrimMemory(gpointer) {
+  trim_source = 0;
+#ifdef __GLIBC__
+  malloc_trim(0);
+#endif
+  return G_SOURCE_REMOVE;
+}
+
 // What the window shows:
 //  - "web": the web view (Foreseerr, or the app's own page),
 //  - "blank": black, while the player gets ready or between two players,
@@ -399,6 +416,14 @@ gboolean OnCurtainDraw(GtkWidget*, cairo_t* cr, gpointer) {
 // Anything else of Moonfin's stays under the curtain.
 void ApplyMode() {
   bool show_web = web != nullptr && g_strcmp0(mode, "web") == 0;
+  if (trim_source != 0) {
+    g_source_remove(trim_source);
+    trim_source = 0;
+  }
+  if (show_web) {
+    // The player's dispose can take up to two seconds after it closes.
+    trim_source = g_timeout_add_seconds(5, TrimMemory, nullptr);
+  }
   bool show_curtain = g_strcmp0(mode, "player") != 0;
   if (show_curtain) {
     gtk_widget_show(curtain);
